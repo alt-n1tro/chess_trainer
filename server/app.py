@@ -82,23 +82,51 @@ class Trainer:
         ).fetchone()
         return dict(row) if row else None
 
-    def deeper(self) -> Drill:
-        """Take the position after your move one level deeper and ask the same
-        question there."""
+    def deeper(self, fen: str | None = None, prev_fen: str | None = None,
+               last_move: str | None = None) -> Drill:
+        """Ask the same question at the position now on the board.
+
+        Normally that is the position after your move, and the new drill hangs
+        off the same tree one level down. When you have walked into a line, it
+        is wherever you walked to: that becomes a drill of its own, because it
+        is not a position you reached by answering.
+        """
         cur = self.drill
         if cur is None or cur.round_state is None:
             raise ValueError("nothing to go deeper from")
         answer = cur.round_state["answer"]
+
+        if fen:
+            board = chess.Board(fen)         # raises on nonsense
+            if board.turn == cur.opponent:
+                return self._drill_aside(cur, fen, None)
+            if prev_fen and last_move:
+                # You are to move in the position you are looking at, so the
+                # question is the one the move before it asked.
+                return self._drill_aside(cur, prev_fen, last_move)
+            raise ValueError(
+                "It is your move in that position. Step back one move: a "
+                "drill starts with the opponent to move."
+            )
+
         if answer is None:
-            raise ValueError("answer first")
+            raise ValueError("Answer first, then you can drill on from there.")
         if cur.depth_level + 1 > drills.MAX_DEPTH_LEVEL:
             raise ValueError(f"Depth is capped at {drills.MAX_DEPTH_LEVEL} levels.")
-        node_id = answer.get("my_node")
         drill = Drill(self.conn_t(), self.pool, answer["fen_after"], cur.mode,
                       name=cur.name, source=cur.source,
                       depth_level=cur.depth_level + 1,
-                      root_hash=cur.root_hash, node_id=node_id)
+                      root_hash=cur.root_hash, node_id=answer.get("my_node"))
         self.stack.append(drill)
+        return drill
+
+    def _drill_aside(self, cur: Drill, fen: str, first_move: str | None) -> Drill:
+        """A position you walked to, drilled on its own terms: its own tree,
+        starting at the move that produced what you were looking at."""
+        drill = Drill(self.conn_t(), self.pool, fen, cur.mode, name=cur.name,
+                      source=dict(cur.source or {}, kind="line"),
+                      first_move=first_move)
+        self.stack = [drill]
         return drill
 
     def back(self) -> Drill | None:
@@ -481,7 +509,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(t.state())
 
         if path == "/api/deeper":
-            t.deeper()
+            t.deeper(data.get("fen"), data.get("prev_fen"),
+                     data.get("last_move"))
             return self.json(t.state())
 
         if path == "/api/reset":

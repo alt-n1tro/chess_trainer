@@ -282,6 +282,34 @@ class WithEngine(unittest.TestCase):
         self.assertEqual(before["opp_san"], after["opp_san"])
         self.assertIsNone(after["answer"])
 
+    def test_drill_from_here_can_start_from_a_line_you_walked(self):
+        """Walking into the engine's line and drilling from there must keep
+        the position you are looking at, not snap back to the one you
+        answered from."""
+        from server import app as appmod
+        trainer = appmod.Trainer(self.pool)
+        trainer.mode = "openings"
+        drill = trainer.new_drill(chess.Board().fen())
+        answer = drill.answer(drill.my_lines()[0]["move"])
+        pv = answer["explanation"]["best_pv"]
+        self.assertTrue(len(pv) >= 2)
+
+        # a step where the opponent is to move: that position becomes the root
+        theirs = next(s for s in pv
+                      if chess.Board(s["fen_after"]).turn == drill.opponent)
+        deep = trainer.deeper(theirs["fen_after"])
+        self.assertEqual(deep.fen, chess.Board(theirs["fen_after"]).fen())
+
+        # a step where you are to move: the drill starts one move back and
+        # replays it, so the board ends up exactly where you were looking
+        mine = next(s for s in pv
+                    if chess.Board(s["fen_after"]).turn != drill.opponent)
+        deep = trainer.deeper(mine["fen_after"], mine["fen_before"], mine["uci"])
+        state = deep.to_json()
+        self.assertEqual(state["fen"], mine["fen_after"])
+        self.assertEqual(state["opp_move"], mine["uci"])
+        self.assertTrue(state["can_answer"])
+
     def test_drill_from_here_starts_where_you_are(self):
         drill = drills.Drill(db.connect(), self.pool, chess.Board().fen(),
                              "openings")

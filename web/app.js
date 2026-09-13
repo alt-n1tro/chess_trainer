@@ -374,14 +374,14 @@ async function walkPv(kind, index) {
   const pv = kind === "best" ? a.explanation.best_pv : a.explanation.my_pv;
   const step = pv && pv[index];
   if (!step) return;
-  pvCursor = { kind, index };
+  pvCursor = { kind, index, step };
   board.disableMoveInput();
   await setBoard(step.fen_after, true);
   markers([[step.uci.slice(0, 2), MARKER_MOVE], [step.uci.slice(2, 4), MARKER_MOVE]], true);
   board.removeArrows();
   el.status.textContent =
     `${step.san} — ${kind === "best" ? "the engine's line" : "your line"}.` +
-    ` Press Esc to come back.`;
+    ` Drill from here starts at this position. Esc comes back.`;
   renderVerdict(state.drill);
 }
 
@@ -716,7 +716,15 @@ document.addEventListener("click", async (event) => {
       return void call("/api/drill", { name: hit.dataset.name, colour: hit.dataset.colour });
     case "show": return void call("/api/show", {});
     case "next": shownKey = null; return void call("/api/next", {});
-    case "deeper": shownKey = null; return void call("/api/deeper", {});
+    case "deeper": {
+      shownKey = null;
+      const step = pvCursor && pvCursor.step;
+      // Drill the position that is on the board -- which, after walking into
+      // a line, is not the position you answered from.
+      return void call("/api/deeper", step
+        ? { fen: step.fen_after, prev_fen: step.fen_before, last_move: step.uci }
+        : {});
+    }
     case "reset": shownKey = null; return void call("/api/reset", {});
     case "back": shownKey = null; return void call("/api/back", {});
     case "save": {
@@ -816,8 +824,15 @@ document.addEventListener("keydown", (event) => {
     case "e": event.preventDefault(); return openEditor(d ? d.fen : null);
     case "s": event.preventDefault();
       return void (document.querySelector('[data-act="save"]') || {}).click?.();
-    case "d": if (d && d.can_deeper) { event.preventDefault(); shownKey = null;
-      return void call("/api/deeper", {}); } return;
+    case "d": {
+      if (!d || !d.can_deeper) return;
+      event.preventDefault();
+      shownKey = null;
+      const step = pvCursor && pvCursor.step;
+      return void call("/api/deeper", step
+        ? { fen: step.fen_after, prev_fen: step.fen_before, last_move: step.uci }
+        : {});
+    }
     case "backspace": event.preventDefault(); shownKey = null;
       return void call("/api/back", {});
     case "r": event.preventDefault(); shownKey = null; return void call("/api/reset", {});

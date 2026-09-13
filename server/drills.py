@@ -236,7 +236,7 @@ class Drill:
 
     def __init__(self, conn, pool, fen: str, mode: str, *, name=None,
                  source=None, depth_level: int = 0, root_hash=None,
-                 node_id=None, parent_node=None):
+                 node_id=None, parent_node=None, first_move: str | None = None):
         # No connection is held: sqlite3 objects belong to the thread that
         # created them, and requests arrive on whichever thread is free.
         self.pool = pool
@@ -258,8 +258,8 @@ class Drill:
             conn, self.root_hash, parent_node, None, self.board,
             depth_level, self.phase,
         )
-        self.candidates = self._candidates()
-        self.order = self._order()
+        self.candidates = self._candidates(first_move)
+        self.order = self._order(first_move)
         self.results: list = [None] * len(self.order)   # tone per round, for the dots
         self.index = 0
         self.round_state = None
@@ -270,7 +270,7 @@ class Drill:
         return db.connect()
 
     # -- candidates
-    def _candidates(self) -> list[dict]:
+    def _candidates(self, first_move: str | None = None) -> list[dict]:
         """The opponent's moves worth answering.
 
         The engine's top five, scored from the opponent's side, minus the ones
@@ -289,7 +289,28 @@ class Drill:
             out.append({"uci": line["move"], "san": san, "cp": line["cp"],
                         "wp": line["wp"], "mate": line["mate"],
                         "pv": line["pv"]})
-        return plausible_moves(out)
+        kept = plausible_moves(out)
+        if first_move and not any(c["uci"] == first_move for c in kept):
+            # The move you were looking at when you asked to drill from here.
+            # It came out of the engine's own line, so it is worth answering
+            # even when the filter above would not have offered it.
+            forced = next((c for c in out if c["uci"] == first_move), None)
+            if forced is None:
+                forced = self._describe(first_move)
+            if forced is not None:
+                kept = [forced] + kept
+        return kept
+
+    def _describe(self, uci: str) -> dict | None:
+        try:
+            move = chess.Move.from_uci(uci)
+            san = self.board.san(move)
+        except (ValueError, AssertionError):
+            return None
+        if move not in self.board.legal_moves:
+            return None
+        return {"uci": uci, "san": san, "cp": None, "wp": 50.0,
+                "mate": None, "pv": [uci]}
 
     def _faced(self, uci: str) -> int:
         row = self.conn.execute(
@@ -298,11 +319,16 @@ class Drill:
         ).fetchone()
         return row["n"] or 0
 
-    def _order(self) -> list[int]:
+    def _order(self, first_move: str | None = None) -> list[int]:
         """Chosen randomly with a bias toward paths you have not yet faced."""
         idx = list(range(len(self.candidates)))
         random.shuffle(idx)
         idx.sort(key=lambda i: self._faced(self.candidates[i]["uci"]))
+        if first_move:
+            for pos, i in enumerate(idx):
+                if self.candidates[i]["uci"] == first_move:
+                    idx.insert(0, idx.pop(pos))
+                    break
         return idx
 
     # -- rounds

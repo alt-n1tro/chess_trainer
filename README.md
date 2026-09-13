@@ -101,9 +101,15 @@ The **FEN** link next to the position name copies it, so you can check any
 recommendation on chess.com or lichess yourself.
 
 **Replay** puts the same question back: the same position, the same opponent
-move, your answer cleared. It never draws a different move. **Drill from here**
-takes the position you just reached and asks the same question one level
-deeper, with the opponent to move.
+move, your answer cleared. It never draws a different move.
+
+**Drill from here** drills whatever is on the board. After answering, that is
+the position your move reached, and the new drill hangs off the same tree one
+level down. If you have clicked into one of the lines under the verdict, it is
+wherever you walked to: the board stays exactly where it is and the opponent is
+asked to move there. When it is your move in the position you walked to, the
+drill starts one move earlier and replays that move, so you are asked the
+question the line was about.
 
 ## How it is put together
 
