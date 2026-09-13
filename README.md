@@ -1,10 +1,16 @@
 # Chess Trainer
 
 A training tool, not a grading tool. A position is set with the opponent to
-move, Stockfish plays one of its five best moves, and you find the best reply.
-Every answer comes back with a verdict in win probability, a structural
-explanation of what your move gave up, and the position returns later if you
-got it wrong.
+move, Stockfish plays one of its five best moves — a different one each round,
+all five before any repeats — and you find the best reply. Nothing on screen
+hints at the answer. When you have played, the verdict says what your move
+actually was: **Best move**, **Second best**, **Third best**, or, when it costs
+enough, **Inaccuracy**, **Mistake** or **Blunder**. Then it shows the engine's
+move and explains what yours gave up.
+
+Drag or click to move, as on chess.com. Right-click to draw arrows and circle
+squares (Shift, Alt and Shift+Alt for other colours). Positions you get wrong
+come back more often.
 
 Local web app, one screen, Firefox on Fedora. No accounts, no telemetry, no
 outbound network except an explicitly requested chess.com fetch.
@@ -53,6 +59,24 @@ prompts.
 `Esc` close · `←` `→` step a move in a game · `Home`/`End` jump · `1`–`5` pick
 the nth opponent option.
 
+## Verdicts
+
+Graded in win probability, converted from the engine's evaluation with the
+Lichess logistic so that the same centipawn loss means the same thing on move 2
+and on move 40. Your move is looked up in the engine's own ordered list:
+
+| What you played | Verdict |
+|---|---|
+| The engine's first choice | Best move |
+| Its second to fifth choice | Second best … Fifth best |
+| Anything else that costs little | Good move |
+| 4 or more points of win probability | Inaccuracy |
+| 10 or more | Mistake |
+| 20 or more, or a mate missed | Blunder |
+
+Damage outranks position in the list: the engine's second choice is still called
+a blunder if it throws the game away.
+
 ## How it is put together
 
 - `server/engine.py` — two persistent Stockfish processes: one foreground, one
@@ -67,7 +91,13 @@ the nth opponent option.
   where a richer explainer would plug in.
 - `server/drills.py` — rounds, the path-keyed tree, weighted replay, leaks.
 - `server/corpus.py` — PGN import, chess.com fetch, phase extraction.
-- `web/` — plain HTML, CSS and modules. The front end holds no chess logic: the
-  server says what is on the board and what is clickable.
+- `web/` — plain HTML, CSS and ES modules, served as static files. No build
+  step. The front end holds no chess logic: the server says what is on the
+  board and which moves are legal.
+- `web/vendor/cm-chessboard` — the board itself: rendering, dragging, animated
+  moves, markers, arrows, the promotion dialog and the right-click annotator.
+  MIT licensed, vendored rather than installed so the app stays a folder of
+  static files. Pieces are the Wikimedia standard set (CC BY-SA 3.0). See
+  `web/vendor/NOTICE.md`.
 
 Everything lives in `data/trainer.db`.

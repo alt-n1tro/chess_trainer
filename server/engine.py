@@ -33,8 +33,33 @@ class EngineMissing(RuntimeError):
 
 
 def logistic_wp(cp: int) -> float:
-    """Lichess logistic, for cached values that predate UCI_ShowWDL."""
+    """Centipawns to win probability, the Lichess logistic.
+
+    This, and not Stockfish's UCI_ShowWDL, is what verdicts are measured in.
+    The engine's WDL is normalised per ply: at move two it maps +111cp to 86%,
+    because a pawn that early really does win that often *between engines*. For
+    a human training tool that makes every second-rate opening move read as a
+    catastrophe. The logistic is stationary, so the same centipawn loss means
+    the same thing on move 2 and on move 40.
+    """
     return 50 + 50 * (2 / (1 + math.exp(-0.00368208 * cp)) - 1)
+
+
+def line_wp(line: dict) -> float:
+    """Win probability for a stored line, from your side to move."""
+    if line.get("mate") is not None:
+        return 100.0 if line["mate"] > 0 else 0.0
+    if line.get("cp") is not None:
+        return round(logistic_wp(line["cp"]), 3)
+    return float(line.get("wp") or 50.0)
+
+
+def with_wp(lines: list[dict]) -> list[dict]:
+    """Recompute wp on every read, so entries cached under an older rule are
+    graded by the current one without invalidating the cache."""
+    for line in lines:
+        line["wp"] = line_wp(line)
+    return lines
 
 
 def threads_per_process() -> int:
@@ -93,24 +118,22 @@ def _lines_from_info(board: chess.Board, infos, multipv: int) -> list[dict]:
         pov = score.pov(board.turn) if score is not None else None
         cp = pov.score() if pov is not None else None
         mate = pov.mate() if pov is not None else None
+        # The engine's own WDL is recorded for reference; grading uses the
+        # stationary logistic in line_wp() instead. See logistic_wp().
         wdl = info.get("wdl")
+        engine_wp = None
         if wdl is not None:
             w = wdl.pov(board.turn)
-            wp = 100.0 * (w.wins + w.draws / 2) / max(1, w.total())
-        elif pov is not None:
-            w = pov.wdl(model="sf", ply=board.ply())
-            wp = 100.0 * (w.wins + w.draws / 2) / max(1, w.total())
-        else:
-            wp = 50.0
-        out.append(
-            {
-                "move": pv[0].uci() if pv else None,
-                "cp": cp,
-                "mate": mate,
-                "wp": round(wp, 3),
-                "pv": [m.uci() for m in pv[:12]],
-            }
-        )
+            engine_wp = round(100.0 * (w.wins + w.draws / 2) / max(1, w.total()), 3)
+        line = {
+            "move": pv[0].uci() if pv else None,
+            "cp": cp,
+            "mate": mate,
+            "engine_wp": engine_wp,
+            "pv": [m.uci() for m in pv[:12]],
+        }
+        line["wp"] = line_wp(line)
+        out.append(line)
     out = [l for l in out if l["move"]]
     return out[:multipv]
 
@@ -142,7 +165,7 @@ class Pool:
             " AND engine_ver=?",
             (db.pos_hash(board, phase), depth, multipv, self.version),
         ).fetchone()
-        return json.loads(row["lines"]) if row else None
+        return with_wp(json.loads(row["lines"])) if row else None
 
     def _store(self, board, depth, multipv, lines, phase=None) -> None:
         conn = db.connect(self.db_path)
@@ -174,7 +197,7 @@ class Pool:
         infos = target.analyse(board, depth, multipv)
         lines = _lines_from_info(board, infos, multipv)
         self._store(board, depth, multipv, lines, phase)
-        return lines
+        return with_wp(lines)
 
     # --- warming ----------------------------------------------------------
 

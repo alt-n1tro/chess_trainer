@@ -92,6 +92,7 @@ def tree_rows(conn, root_hash: int) -> list[dict]:
                 "turn": "white" if board.turn == chess.WHITE else "black",
                 "drilled": bool(answered),
                 "verdict": answered["verdict"] if answered else None,
+                "tone": grading.TONES.get(answered["verdict"]) if answered else None,
             })
             walk(r["id"], depth + 1)
 
@@ -116,12 +117,11 @@ def node_path(conn, node_id: int) -> list:
 def position_stats(conn, pos_hash: int) -> dict:
     row = conn.execute(
         "SELECT COUNT(*) seen,"
-        " SUM(verdict='wrong') wrong,"
-        " SUM(verdict='shown') shown,"
+        f" SUM(verdict IN {_MISS_SQL}) misses,"
         " SUM(verdict='best') best"
         " FROM answers WHERE pos_hash=?", (pos_hash,),
     ).fetchone()
-    return {k: (row[k] or 0) for k in ("seen", "wrong", "shown", "best")}
+    return {k: (row[k] or 0) for k in ("seen", "misses", "best")}
 
 
 def _recency_penalty(rank: int | None) -> float:
@@ -161,7 +161,7 @@ def pick_random(conn, mode: str, name: str | None = None,
     weights = []
     for r in rows:
         s = position_stats(conn, r["pos_hash"])
-        w = (s["wrong"] + s["shown"] + 1) / (s["seen"] + 1)
+        w = (s["misses"] + 1) / (s["seen"] + 1)
         w *= _recency_penalty(rank_of.get(r["pos_hash"]))
         weights.append(max(w, 0.0))
     if sum(weights) <= 0:
@@ -221,6 +221,7 @@ class Drill:
         )
         self.candidates = self._candidates()
         self.order = self._order()
+        self.results: list = [None] * len(self.order)   # tone per round, for the dots
         self.index = 0
         self.round_state = None
         self.start_round(0)
@@ -291,6 +292,7 @@ class Drill:
         """Restart this position from round one. It replays this position; it
         never fetches a fresh one."""
         self.order = self._order()
+        self.results = [None] * len(self.order)
         self.start_round(0)
 
     def _warm(self) -> None:
@@ -299,11 +301,11 @@ class Drill:
         for cand in self.candidates:             # 1. the five children
             b = self.board.copy(stack=False)
             b.push(chess.Move.from_uci(cand["uci"]))
-            jobs.append((b.fen(), DEPTH_GRADE, 1))
+            jobs.append((b.fen(), DEPTH_GRADE, MULTIPV_CANDIDATES))
         for cand in self.candidates[:2]:         # 2. grandchildren, top 2
             b = self.board.copy(stack=False)
             b.push(chess.Move.from_uci(cand["uci"]))
-            for line in self.pool.cached(b, DEPTH_GRADE, 1) or []:
+            for line in self.pool.cached(b, DEPTH_GRADE, MULTIPV_CANDIDATES) or []:
                 try:
                     b2 = b.copy(stack=False)
                     b2.push(chess.Move.from_uci(line["move"]))
@@ -323,7 +325,7 @@ class Drill:
             " LEFT JOIN analysis a ON a.pos_hash = p.pos_hash"
             "   AND a.depth = ? AND a.multipv = ?"
             " LEFT JOIN (SELECT pos_hash, COUNT(*) seen,"
-            "            SUM(verdict IN ('wrong','shown')) misses"
+            f"            SUM(verdict IN {_MISS_SQL}) misses"
             "            FROM answers GROUP BY pos_hash) s"
             "   ON s.pos_hash = p.pos_hash"
             " WHERE p.phase = ? AND a.pos_hash IS NULL"
@@ -334,12 +336,18 @@ class Drill:
         return [(r["fen"], DEPTH_CANDIDATES, MULTIPV_CANDIDATES) for r in rows]
 
     # -- answering
-    def best_line(self) -> dict | None:
+    def my_lines(self) -> list[dict]:
+        """The engine's ordered choices for you here. Ranking your move needs
+        the whole list, not only the best of them."""
         rs = self.round_state
         if not rs:
-            return None
+            return []
         board = chess.Board(rs["fen"])
-        lines = self.pool.analyse(board, DEPTH_GRADE, 1, phase=rs["phase"])
+        return self.pool.analyse(board, DEPTH_GRADE, MULTIPV_CANDIDATES,
+                                 phase=rs["phase"])
+
+    def best_line(self) -> dict | None:
+        lines = self.my_lines()
         return lines[0] if lines else None
 
     def answer(self, uci: str) -> dict:
@@ -354,19 +362,27 @@ class Drill:
         if move not in board.legal_moves:
             raise ValueError("That move is not legal here.")
         san = board.san(move)
-        best = self.best_line()
-        if best is None:
+        lines = self.my_lines()
+        if not lines:
             raise RuntimeError("no engine evaluation for this position")
+        best = lines[0]
+        rank = grading.rank_of(lines, move.uci())
 
         after = board.copy(stack=False)
         after.push(move)
         after_phase = db.classify_phase(after)
-        mine_lines = self.pool.analyse(after, DEPTH_GRADE, 1, phase=after_phase)
-        mine = _flip(mine_lines[0]) if mine_lines else {"wp": 50.0, "cp": 0,
-                                                        "mate": None, "pv": []}
-        if move.uci() == best["move"]:
-            mine = dict(best)
-        result = grading.grade(best, mine)
+        mine = _outcome(after)
+        if mine is None:
+            lines_after = self.pool.analyse(after, DEPTH_GRADE, 1,
+                                            phase=after_phase)
+            mine = (_flip(lines_after[0]) if lines_after
+                    else {"wp": 50.0, "cp": 0, "mate": None, "pv": []})
+        ranked = next((l for l in lines if l["move"] == move.uci()), None)
+        if ranked is not None:
+            # The engine already searched this move: use its own number rather
+            # than a second evaluation of the position after it.
+            mine = dict(ranked)
+        result = grading.grade(best, mine, rank)
 
         best_san = board.san(chess.Move.from_uci(best["move"]))
         exp = explain_mod.explain(
@@ -378,6 +394,7 @@ class Drill:
         my_node = tree_touch(self.conn, self.root_hash, rs["node_id"],
                              move.uci(), after, self.depth_level, after_phase)
         self._record(rs, move.uci(), result["verdict"], result["delta_wp"])
+        self.results[self.index] = result["tone"]
         rs["answer"] = {
             "my_move": move.uci(), "my_san": san,
             "best_move": best["move"], "best_san": best_san,
@@ -401,6 +418,7 @@ class Drill:
         after = board.copy(stack=False)
         after.push(move)
         self._record(rs, None, "shown", None)
+        self.results[self.index] = "shown"
         rs["answer"] = {
             "my_move": None, "my_san": None,
             "best_move": best["move"], "best_san": board.san(move),
@@ -452,17 +470,16 @@ class Drill:
             "phase": self.phase,
             "round": self.index + 1,
             "rounds": len(self.order),
+            "round_results": list(self.results),
             "has_next_round": self.has_next_round(),
-            "candidates": [
-                {"uci": c["uci"], "san": c["san"],
-                 "active": bool(self.order) and i == self.order[self.index]}
-                for i, c in enumerate(self.candidates)
-            ],
             "node_id": self.node_id,
         }
         if rs:
             state.update({
                 "fen": rs["fen"],
+                # The position before their move, so the board can play it out
+                # rather than cutting to the answer.
+                "base_fen": self.fen,
                 "opp_move": rs["candidate"]["uci"],
                 "opp_san": rs["candidate"]["san"],
                 "answer": rs["answer"],
@@ -476,6 +493,16 @@ class Drill:
                           "can_answer": False,
                           "to_move": "white" if self.board.turn == chess.WHITE else "black"})
         return state
+
+
+def _outcome(board: chess.Board) -> dict | None:
+    """A finished game has no engine lines at all. Checkmate is not a 50%
+    position, and the grader must not be handed one."""
+    if board.is_checkmate():
+        return {"cp": None, "mate": 1, "wp": 100.0, "pv": [], "final": "mate"}
+    if board.is_game_over(claim_draw=True):
+        return {"cp": 0, "mate": None, "wp": 50.0, "pv": [], "final": "draw"}
+    return None
 
 
 def _flip(line: dict) -> dict:
@@ -516,6 +543,9 @@ def board_array(fen: str) -> list:
 
 # --- leaks -----------------------------------------------------------------
 
+_MISS_SQL = "(" + ", ".join(f"'{v}'" for v in grading.MISSES) + ")"
+
+
 def _cached_any(conn, pos_hash: int, pool, board):
     """The cached best line for a position. ./run leaks is read-only and never
     starts an engine, so it reads the cache directly -- newest entry wins,
@@ -536,7 +566,7 @@ def leaks(conn, pool=None, limit: int = 20) -> dict:
     """Which move do I keep getting wrong, and how deep does it start."""
     rows = conn.execute(
         "SELECT a.pos_hash, COUNT(*) attempts,"
-        " SUM(a.verdict IN ('wrong','shown')) misses,"
+        f" SUM(a.verdict IN {_MISS_SQL}) misses,"
         " MAX(a.answered_at) last"
         " FROM answers a GROUP BY a.pos_hash HAVING misses > 0"
     ).fetchall()
@@ -545,7 +575,7 @@ def leaks(conn, pool=None, limit: int = 20) -> dict:
         rate = r["misses"] / r["attempts"]
         worst = conn.execute(
             "SELECT my_move, COUNT(*) n FROM answers WHERE pos_hash=?"
-            " AND verdict='wrong' AND my_move IS NOT NULL"
+            f" AND verdict IN {_MISS_SQL} AND my_move IS NOT NULL"
             " GROUP BY my_move ORDER BY n DESC LIMIT 1", (r["pos_hash"],),
         ).fetchone()
         # The answered position sits one move past the pooled one, so the
