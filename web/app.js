@@ -523,6 +523,7 @@ async function openHelp() {
       ["E", "Set up a position"], ["S", "Save position"], ["Backspace", "Back"],
       ["R", "Replay this position"], ["D", "Drill from here"],
       ["Space", "Show me the move"], ["1 \u2013 5", "Moves per position"],
+      ["T", "Statistics"],
       ["? / H", "Help"], ["Esc", "Close"],
       ["← →", "In a game: step a move"],
       ["Home / End", "In a game: jump to start / end"],
@@ -644,12 +645,14 @@ function show(node, html) {
 }
 
 function closeOverlays() {
-  [el.menu, el.help].forEach((n) => { n.hidden = true; });
+  [el.menu, el.help, $("stats")].forEach((n) => { n.hidden = true; });
   el.modeList.hidden = true;
   el.chainList.hidden = true;
 }
 
-function anyOverlayOpen() { return !el.menu.hidden || !el.help.hidden; }
+function anyOverlayOpen() {
+  return !el.menu.hidden || !el.help.hidden || !$("stats").hidden;
+}
 
 // --- events ----------------------------------------------------------------
 
@@ -794,6 +797,12 @@ document.addEventListener("click", async (event) => {
       }
       return;
     }
+    case "stats": return openStats();
+    case "stats-tab": return openStats(hit.dataset.tab);
+    case "drill": closeOverlays(); shownKey = null;
+      return void call("/api/drill/review", { id: Number(hit.dataset.id) });
+    case "playout": closeOverlays(); shownKey = null;
+      return void call("/api/drill/review", { id: Number(hit.dataset.id), play_out: true });
     case "pv": return walkPv(hit.dataset.kind, Number(hit.dataset.i));
     case "hand": editor.hand = hit.dataset.p; return drawEditor();
     case "turn": editor.turn = editor.turn === "black" ? "white" : "black";
@@ -830,6 +839,7 @@ document.addEventListener("click", async (event) => {
 $("btn-random").addEventListener("click", () => { shownKey = null; call("/api/random", {}); });
 $("btn-openings").addEventListener("click", openMenu);
 $("btn-help").addEventListener("click", openHelp);
+$("btn-stats").addEventListener("click", () => openStats());
 $("btn-game").addEventListener("click", async () => {
   const url = window.prompt("chess.com game link, or paste a PGN");
   if (!url) return;
@@ -895,9 +905,185 @@ document.addEventListener("keydown", (event) => {
       return void call("/api/back", {});
     case "r": event.preventDefault(); shownKey = null; return void call("/api/reset", {});
     case "?": case "h": event.preventDefault(); return openHelp();
+    case "t": event.preventDefault(); return openStats();
     default: break;
   }
 });
+
+
+// --- statistics ---------------------------------------------------------------
+
+const PHASE_LABEL = { opening: "Opening", middlegame: "Middlegame", endgame: "Endgame" };
+
+async function openStats(tab) {
+  tab = tab || openStats.last || "games";
+  openStats.last = tab;
+  const data = await call(tab === "games" ? "/api/stats/games" : "/api/stats/gym", {});
+  if (!data) return;
+  const el2 = $("stats");
+  const tabs = `<div class="tabs">` +
+    `<button data-act="stats-tab" data-tab="games" class="${tab === "games" ? "on" : ""}">Your games</button>` +
+    `<button data-act="stats-tab" data-tab="gym" class="${tab === "gym" ? "on" : ""}">Gym</button>` +
+    `<button class="close ghost" data-act="close">✕</button></div>`;
+  show(el2, tabs + `<div class="body">` +
+    (tab === "games" ? gamesHtml(data) : gymHtml(data)) + `</div>`);
+}
+
+function tile(v, k) {
+  return `<div class="tile"><div class="v">${v === null || v === undefined ? "—" : v}</div>` +
+    `<div class="k">${k}</div></div>`;
+}
+
+function bar(label, value, n, bad) {
+  const v = value === null || value === undefined ? 0 : value;
+  return `<div class="bar"><span>${esc(label)}</span>` +
+    `<div class="track"><div class="fill ${bad ? "bad" : ""}" style="width:${Math.max(0, Math.min(100, v))}%"></div></div>` +
+    `<span class="n">${value === null || value === undefined ? "—" : v + "%"}` +
+    `${n !== undefined ? ` · ${n}` : ""}</span></div>`;
+}
+
+/** A radar of hit rates per theme. Axes with few samples are drawn thin. */
+function radar(rows, valueKey) {
+  rows = (rows || []).filter((r) => r.n > 0);
+  if (rows.length < 3) return "";
+  const size = 420, cx = size / 2, cy = size / 2, R = 140;
+  const n = rows.length;
+  const angle = (i) => -Math.PI / 2 + (2 * Math.PI * i) / n;
+  const pt = (i, v) => [cx + R * (v / 100) * Math.cos(angle(i)),
+                        cy + R * (v / 100) * Math.sin(angle(i))];
+  let svg = `<svg class="radar" viewBox="0 0 ${size} ${size}" role="img" aria-label="radar">`;
+  for (const ring of [25, 50, 75, 100]) {
+    const pts = rows.map((_, i) => pt(i, ring).join(",")).join(" ");
+    svg += `<polygon class="ring" points="${pts}"></polygon>`;
+    svg += `<text class="tick" x="${cx + 3}" y="${cy - R * ring / 100 - 2}">${ring}</text>`;
+  }
+  rows.forEach((_, i) => {
+    const [x, y] = pt(i, 100);
+    svg += `<line class="axis" x1="${cx}" y1="${cy}" x2="${x}" y2="${y}"></line>`;
+  });
+  const poly = rows.map((r, i) => pt(i, r[valueKey] || 0).join(",")).join(" ");
+  svg += `<polygon class="area" points="${poly}"></polygon>`;
+  rows.forEach((r, i) => {
+    const [x, y] = pt(i, r[valueKey] || 0);
+    svg += `<circle class="pt" cx="${x}" cy="${y}" r="3.5"></circle>`;
+    const [lx, ly] = pt(i, 122);
+    const anchor = Math.abs(Math.cos(angle(i))) < 0.2 ? "middle"
+      : (Math.cos(angle(i)) > 0 ? "start" : "end");
+    svg += `<text class="lab ${r.n < 5 ? "thin" : ""}" x="${lx}" y="${ly + 4}" text-anchor="${anchor}">` +
+      `${esc(r.label)} <tspan class="tick">${r.n}</tspan></text>`;
+  });
+  return svg + `</svg>`;
+}
+
+function spark(values) {
+  values = (values || []).filter((v) => v !== null && v !== undefined);
+  if (values.length < 2) return "";
+  const w = 600, h = 60, pad = 4;
+  const x = (i) => pad + (i * (w - 2 * pad)) / (values.length - 1);
+  const y = (v) => h - pad - ((v / 100) * (h - 2 * pad));
+  const d = values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">` +
+    `<line class="base" x1="0" x2="${w}" y1="${y(50)}" y2="${y(50)}"></line><path d="${d}"></path></svg>`;
+}
+
+function moment(m, act, extra) {
+  const who = m.my_colour === "white"
+    ? `you vs ${esc(m.black)}` : `${esc(m.white)} vs you`;
+  return `<div class="moment"><div><span class="t">${esc(m.san || "?")}</span>` +
+    (m.best_san && m.best_san !== m.san ? ` <span class="m">best ${esc(m.best_san)}</span>` : "") +
+    `<div class="m">move ${Math.ceil(m.ply / 2)} · ${who}${extra ? " · " + extra : ""}</div></div>` +
+    `<button data-act="${act}" data-id="${m.id}">${act === "playout" ? "Play it out" : "Drill"}</button></div>`;
+}
+
+function gamesHtml(d) {
+  const cov = d.coverage || {};
+  let html = "";
+  if (!cov.reviewed) {
+    return `<div><h3>Your games</h3><div class="hint">None of your ${cov.games || 0} games` +
+      ` are reviewed yet. Run <code>./run review</code>; it is resumable and each` +
+      ` game takes under a minute.</div></div>`;
+  }
+  const o = d.overall || {};
+  html += `<div><div class="hint">${cov.reviewed} of ${cov.games} games reviewed` +
+    (cov.reviewed < cov.games ? ` — <code>./run review</code> for the rest` : "") +
+    `.</div></div>`;
+  html += `<div class="tiles">${tile(o.accuracy, "accuracy")}` +
+    `${tile(o.blunders_per_game, "blunders / game")}${tile(o.mistakes_per_game, "mistakes / game")}` +
+    `${tile(o.inaccuracies_per_game, "inaccuracies / game")}</div>`;
+  if ((d.by_colour || []).length) {
+    html += `<div><h3>By colour</h3><div class="bars">` + d.by_colour.map((c) =>
+      bar(`${c.colour} · score`, c.score, `${c.games} games`) +
+      bar(`${c.colour} · accuracy`, c.accuracy)).join("") + `</div></div>`;
+  }
+  html += `<div><h3>By phase</h3><div class="bars">` + (d.by_phase || []).map((p) =>
+    bar(`${PHASE_LABEL[p.phase]} · accuracy`, p.accuracy, `${p.moves} moves`) +
+    bar(`${PHASE_LABEL[p.phase]} · blunders`, p.blunder_rate, undefined, true)).join("") +
+    `</div></div>`;
+  html += `<div><h3>What you find, and what you miss</h3>` +
+    `<div class="hint">When the engine's move was about a theme, how often you played it.` +
+    ` Thin labels have fewer than five samples.</div>` +
+    `<div class="radar-wrap">${radar(d.themes, "hit_rate")}<div class="bars">` +
+    (d.themes || []).map((t) => bar(t.label, t.hit_rate, `${t.n}`)).join("") + `</div></div></div>`;
+  if ((d.allowed || []).length) {
+    html += `<div><h3>What your mistakes allowed</h3><div class="bars">` +
+      d.allowed.slice(0, 8).map((a) => bar(a.label, Math.min(100, a.n * 100 / d.allowed[0].n), `${a.n} times`, true)).join("") +
+      `</div></div>`;
+  }
+  const ms = d.mates_summary || {};
+  if (ms.had) {
+    html += `<div><h3>Mates you had</h3><div class="hint">${ms.found || 0} of ${ms.had} forced mates` +
+      ` (within 11) were played. Play one out: you must find every move.</div><div class="moments">` +
+      (d.mates || []).slice(0, 12).map((m) => moment(m, "playout",
+        `mate in ${m.mate_in}${m.kept_mate ? ", found" : ", missed"}`)).join("") + `</div></div>`;
+  }
+  if ((d.worst || []).length) {
+    html += `<div><h3>Your worst moments</h3><div class="moments">` +
+      d.worst.slice(0, 10).map((w) => moment(w, "drill",
+        `${w.delta_wp.toFixed(0)} points · ${(w.themes || []).join(", ") || w.phase}`)).join("") +
+      `</div></div>`;
+  }
+  if ((d.openings || []).length) {
+    html += `<div><h3>Openings</h3><div class="hint">Score, accuracy, and your winning chances` +
+      ` at move 12 — where the opening leaves you.</div><table class="stats">` +
+      `<tr><th>opening</th><th>as</th><th>games</th><th>score</th><th>accuracy</th><th>at move 12</th></tr>` +
+      d.openings.map((o) => `<tr><td>${esc(o.name || "?")}</td><td>${o.colour}</td><td>${o.games}</td>` +
+        `<td>${o.score === null ? "—" : o.score + "%"}</td><td>${o.accuracy ?? "—"}</td>` +
+        `<td>${o.wp_at_12 === null || o.wp_at_12 === undefined ? "—" : o.wp_at_12 + "%"}</td></tr>`).join("") +
+      `</table></div>`;
+  }
+  if ((d.trend || []).length > 1) {
+    html += `<div><h3>Accuracy over your last ${d.trend.length} games</h3>${spark(d.trend.map((t) => t.accuracy))}</div>`;
+  }
+  return html;
+}
+
+function gymHtml(d) {
+  const o = d.overall || {};
+  if (!o.answers) return `<div class="hint">No answers yet.</div>`;
+  let html = `<div class="tiles">${tile(o.answers, "answers")}` +
+    `${tile(Math.round(100 * (o.best || 0) / o.answers) + "%", "best move")}` +
+    `${tile(o.blunder || 0, "blunders")}${tile(o.shown || 0, "shown")}</div>`;
+  const section = (title, rows, labeller, hint) => {
+    if (!(rows || []).length) return "";
+    return `<div><h3>${title}</h3>${hint ? `<div class="hint">${hint}</div>` : ""}<div class="bars">` +
+      rows.map((r) => bar(labeller(r), r.best_rate, `${r.n}`)).join("") + `</div></div>`;
+  };
+  html += section("Best move by phase", d.by_phase, (r) => PHASE_LABEL[r.key] || r.key);
+  html += section("By move of a chain", d.by_step, (r) => `move ${r.key}`,
+    "Does your accuracy hold up once you have to follow a plan through?");
+  html += section("By drill-from-here level", d.by_level, (r) => `level ${r.key}`,
+    "Where you leave memory and start calculating.");
+  html += `<div><h3>By theme</h3><div class="hint">How often you found the move when the` +
+    ` position was about a theme.</div><div class="radar-wrap">${radar(d.themes, "hit_rate")}` +
+    `<div class="bars">` + (d.themes || []).map((t) => bar(t.label, t.hit_rate, `${t.n}`)).join("") +
+    `</div></div></div>`;
+  html += section("By opening", d.by_opening, (r) => r.key || "?");
+  if ((d.recent || []).length) {
+    html += `<div><h3>Last ${d.recent.length} answers</h3><div class="form">` +
+      d.recent.map((v) => `<span class="${v}"></span>`).join("") + `</div></div>`;
+  }
+  return html;
+}
 
 function esc(text) {
   return String(text === null || text === undefined ? "" : text)

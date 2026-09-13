@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import chess
 import chess.pgn
 
-from . import corpus, db, drills, engine
+from . import corpus, db, drills, engine, stats
 from .drills import Drill
 
 WEB_DIR = os.path.join(db.ROOT, "web")
@@ -623,6 +623,42 @@ class Handler(BaseHTTPRequestHandler):
             if not t.game:
                 raise ValueError("no game loaded")
             return self.json({"fen": t.game_state()["fen"]})
+
+        if path == "/api/stats/games":
+            return self.json(stats.games_view(conn))
+
+        if path == "/api/stats/gym":
+            stats.backfill_tags(conn)
+            return self.json(stats.gym_view(conn))
+
+        if path == "/api/drill/review":
+            # A moment from one of your games: the question is the position
+            # you faced, so the drill starts one move earlier and replays the
+            # opponent's move into it.
+            row = conn.execute(
+                "SELECT m.*, g.white, g.black, g.white_elo, g.black_elo, g.result,"
+                " g.my_colour, g.url FROM review_moves m JOIN games g ON g.id=m.game_id"
+                " WHERE m.id=?", (data.get("id"),)).fetchone()
+            if row is None:
+                raise LookupError("no such moment")
+            prev = conn.execute(
+                "SELECT fen, move FROM review_moves WHERE game_id=? AND ply=?",
+                (row["game_id"], row["ply"] - 1)).fetchone()
+            if prev is None:
+                raise ValueError("That is the first move of the game.")
+            chain = int(data.get("chain") or t.chain)
+            if row["mate_in"] and data.get("play_out"):
+                chain = int(row["mate_in"])
+            label = {"kind": "review", "game": {
+                "white": row["white"], "black": row["black"],
+                "white_elo": row["white_elo"], "black_elo": row["black_elo"],
+                "result": row["result"], "my_colour": row["my_colour"],
+                "url": row["url"]}, "ply": row["ply"]}
+            drill = Drill(conn, self.pool if False else t.pool, prev["fen"], t.mode,
+                          name=f"Move {(row['ply'] + 1) // 2} of your game",
+                          source=label, first_move=prev["move"], chain=chain)
+            t.stack, t.game = [drill], None
+            return self.json(t.state())
 
         if path == "/api/leaks":
             return self.json(drills.leaks(conn, t.pool))

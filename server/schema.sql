@@ -97,3 +97,43 @@ CREATE TABLE IF NOT EXISTS draws (
   phase     TEXT NOT NULL,
   drawn_at  INTEGER NOT NULL
 );
+
+-- Engine review of whole games: one row per move, from the mover's side.
+CREATE TABLE IF NOT EXISTS reviews (
+  game_id      INTEGER PRIMARY KEY REFERENCES games(id),
+  depth        INTEGER NOT NULL,
+  engine_ver   TEXT NOT NULL,
+  reviewed_at  INTEGER NOT NULL,
+  accuracy     REAL,               -- your accuracy in this game, 0-100
+  plies        INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS review_moves (
+  id           INTEGER PRIMARY KEY,
+  game_id      INTEGER NOT NULL REFERENCES games(id),
+  ply          INTEGER NOT NULL,   -- 1 = White's first move
+  is_me        INTEGER NOT NULL,   -- 1 for your moves
+  fen          TEXT NOT NULL,      -- position before the move
+  move         TEXT NOT NULL,      -- what was played, UCI
+  best         TEXT,               -- what the engine wanted
+  wp_before    REAL,               -- win probability before, mover's side
+  wp_after     REAL,               -- after the move played
+  delta_wp     REAL,
+  verdict      TEXT NOT NULL,
+  accuracy     REAL,               -- this move's accuracy, 0-100
+  mate_in      INTEGER,            -- forced mate available to the mover, if any
+  kept_mate    INTEGER,            -- 1 if the move played still forces mate
+  phase        TEXT NOT NULL,
+  themes       TEXT NOT NULL,      -- JSON: what the best move was about
+  allowed      TEXT                -- JSON: what the reply could then do, when
+                                   -- the move played was a mistake or worse
+);
+CREATE INDEX IF NOT EXISTS review_moves_game ON review_moves(game_id, ply);
+CREATE INDEX IF NOT EXISTS review_moves_me ON review_moves(is_me, verdict);
+
+-- What a drilled position is about, for the gym statistics.
+CREATE TABLE IF NOT EXISTS position_themes (
+  pos_hash     INTEGER PRIMARY KEY,
+  themes       TEXT NOT NULL,      -- JSON list
+  computed_at  INTEGER NOT NULL
+);

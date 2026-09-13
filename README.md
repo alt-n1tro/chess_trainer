@@ -42,6 +42,7 @@ ever installed with sudo; if a step would need root, the app stops and says so.
 | `./run leaks` | Print the current leak list. |
 | `./run warm` | Pre-analyse everything not yet cached. Long-running. |
 | `./run doctor` | Check engine binary, DB integrity, venv, port availability. |
+| `./run review [--depth 16] [--limit N]` | Engine-review your games for the statistics. Resumable; run it again after each import. |
 | `./run test` | Run the test suite. |
 | `./run whoami <name>` | Record which chess.com name is you, and re-tag stored games. |
 
@@ -55,10 +56,46 @@ prompts.
 
 ## Keys
 
-`Enter` next · `1`–`5` moves per position · `O`/`B` menu · `M` cycle mode · `E` set up a position ·
+`Enter` next · `1`–`5` moves per position · `T` statistics · `O`/`B` menu · `M` cycle mode · `E` set up a position ·
 `S` save · `Backspace` back · `R` reset and replay this position · `?`/`H` help ·
 `Esc` close · `←` `→` step a move in a game · `Home`/`End` jump · `1`–`5` pick
 the nth opponent option.
+
+## Statistics you can act on
+
+`Stats` in the top bar (or `T`) opens two views.
+
+**Your games** reads an engine review of the games you actually played
+(`./run review`; about a minute a game, resumable, and the analysis it does
+feeds the drill cache too). Every move you made is graded the way the gym
+grades you, and the engine's best move at every turn is tagged with what it
+was about: fork, pin, skewer, discovered attack, hanging piece, sacrifice,
+defensive move, promotion, king attack, quiet move. From that:
+
+- accuracy and blunder rate by phase, and by colour, with sample sizes
+- a radar of **what you find and what you miss**: when the best move was a
+  fork, how often you played it — the same idea as a puzzle-site radar, but
+  measured on your own games rather than on puzzles
+- **what your mistakes allowed**: the tactics your errors handed the opponent
+- **mates you had**: every forced mate within eleven moves that you were given,
+  found or missed, with *Play it out* — a drill where you must find every move
+  of the mate
+- your worst moments, each with a *Drill* button that puts you back in that
+  position with the opponent to move
+- openings by family and colour: score, accuracy, and your winning chances at
+  move 12, which is where an opening leaves you
+- accuracy over your recent games
+
+**Gym** reads your answers in the trainer: best-move rate by phase, by move of
+a chain (does it hold up once you have to follow a plan?), by drill-from-here
+level, by theme, and by opening, plus your last fifty answers.
+
+Every number shows how many moves it rests on. Radar labels turn thin under
+five samples: a 40% hit rate on three forks is a hint, not a fact.
+
+There is no comparison against other players: no public dataset gives
+accuracy or blunder rates by rating for the engine and depth used here, and
+invented benchmarks would be worse than none.
 
 ## One move, or a plan
 

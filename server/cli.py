@@ -10,7 +10,7 @@ import time
 import chess
 import chess.pgn
 
-from . import app, corpus, db, drills, engine
+from . import app, corpus, db, drills, engine, review
 
 
 class Progress:
@@ -362,6 +362,60 @@ def cmd_warm(args) -> int:
     return 0
 
 
+def cmd_review(args) -> int:
+    """Engine-review your games, newest first. Resumable: already reviewed
+    games are skipped, so this can be run again after every import."""
+    conn = db.init()
+    todo = review.pending(conn, args.depth, args.limit)
+    cov = review.coverage(conn)
+    if not todo:
+        print(f"All {cov['reviewed']} of your games are reviewed at depth"
+              f" {args.depth} or deeper.")
+        return 0
+    plies = sum(
+        len(r["pgn"].split()) // 2 for r in todo)      # rough: tokens / 2
+    if not confirm(
+        f"Review {len(todo)} game(s) at depth {args.depth}"
+        f" ({cov['reviewed']} of {cov['games']} already done).\n"
+        f"  - roughly {plies} positions to search; estimate {_dur(plies * 0.7)}\n"
+        f"  - writes review rows and fills the analysis cache; nothing is lost\n"
+        f"  - interruptible with ^C; finished games stay finished\n", args.yes,
+    ):
+        return 1
+    info = engine.probe()
+    if not info["ok"]:
+        print(f"Engine not usable: {info.get('error')}", file=sys.stderr)
+        return 1
+    pool = engine.Pool()
+    bar = Progress(len(todo), "reviewing")
+    done = 0
+    try:
+        for gi, row in enumerate(todo):
+            label = f"{row['white']} vs {row['black']}"[:34]
+
+            def progress(i, n, label=label, gi=gi):
+                bar.n = gi
+                bar.stage = f"{label}  {i}/{n}"
+                bar.draw()
+
+            summary = review.review_game(conn, pool, row, args.depth, progress)
+            done += 1
+            if summary and summary["accuracy"] is not None and not bar.enabled:
+                print(f"  {label}: accuracy {summary['accuracy']}")
+    except KeyboardInterrupt:
+        bar.done()
+        print(f"\nStopped. {done} of {len(todo)} reviewed; the rest waits for"
+              f" next time.")
+        return 130
+    finally:
+        bar.done()
+        pool.close()
+    cov = review.coverage(conn)
+    print(f"Reviewed {done} game(s). {cov['reviewed']} of {cov['games']} done.")
+    print("Open the statistics with ? in the app.")
+    return 0
+
+
 def cmd_doctor(args) -> int:
     ok = True
     print(f"python      {sys.version.split()[0]}  ({sys.executable})")
@@ -454,6 +508,13 @@ def main(argv=None) -> int:
     p = sub.add_parser("warm")
     p.add_argument("--yes", action="store_true")
     p.set_defaults(func=cmd_warm)
+
+    p = sub.add_parser("review")
+    p.add_argument("--depth", type=int, default=review.REVIEW_DEPTH)
+    p.add_argument("--limit", type=int, default=None,
+                   help="review at most this many games (newest first)")
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(func=cmd_review)
 
     p = sub.add_parser("doctor")
     p.set_defaults(func=cmd_doctor)

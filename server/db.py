@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(ROOT, "data", "trainer.db")
 SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _local = threading.local()
 
@@ -66,6 +66,7 @@ def migrate(conn: sqlite3.Connection, have: int) -> None:
         if "step" not in columns:
             conn.execute(
                 "ALTER TABLE answers ADD COLUMN step INTEGER NOT NULL DEFAULT 1")
+    # v3 only adds tables, which the script above already created.
     conn.execute(
         "UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),)
     )

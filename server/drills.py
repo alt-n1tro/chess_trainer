@@ -13,11 +13,12 @@ import time
 
 import chess
 
-from . import db, explain as explain_mod, grading
+from . import db, explain as explain_mod, grading, stats
 from .engine import DEPTH_CANDIDATES, DEPTH_GRADE, MULTIPV_CANDIDATES
 
 SESSION_ID = "local"          # one local user, one persistent session
-MAX_CHAIN = 5                 # how many moves in a row a position can ask for
+MAX_CHAIN = 5                 # what the selector offers
+MAX_CHAIN_MATE = 20           # playing out a long mate needs more
 MAX_DEPTH_LEVEL = 6           # Drill from here is capped at 6 levels
 ROUNDS = MULTIPV_CANDIDATES
 RECENCY_COLD = 10             # the last 10 positions drawn: weight 0
@@ -262,7 +263,7 @@ class Drill:
         self.depth_level = depth_level
         # How many moves in a row this position asks for. One move tests
         # whether you can see; three test whether you had a plan.
-        self.chain = max(1, min(int(chain or 1), MAX_CHAIN))
+        self.chain = max(1, min(int(chain or 1), MAX_CHAIN_MATE))
         self.phase = db.classify_phase(self.board)
         self.hash = db.pos_hash(self.board, self.phase)
         self.root_hash = root_hash if root_hash is not None else self.hash
@@ -515,6 +516,7 @@ class Drill:
             raise RuntimeError("no engine evaluation for this position")
         rank = grading.rank_of(lines, move.uci())
         best_move = chess.Move.from_uci(lines[0]["move"])
+        stats.tag_position(self.conn, rs["hash"], rs["fen"], lines)
 
         # Both moves are judged the same way: by the position each one leads
         # to, searched to the same depth. Scoring your move from a MultiPV
@@ -607,6 +609,7 @@ class Drill:
         if best is None:
             raise RuntimeError("no engine evaluation for this position")
         move = chess.Move.from_uci(best["move"])
+        stats.tag_position(self.conn, rs["hash"], rs["fen"], self.my_lines())
         best_eval, after = self._eval_after(board, move)
         self._record(rs, None, "shown", None, rs["step"])
         rs["steps"].append("shown")

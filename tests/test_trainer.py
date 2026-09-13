@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import chess
 
-from server import app, corpus, db, drills, engine, explain, grading
+from server import app, corpus, db, drills, engine, explain, grading, review, stats, themes
 
 
 class Lines(unittest.TestCase):
@@ -181,6 +181,84 @@ class Chains(unittest.TestCase):
             drill = drills.Drill.__new__(drills.Drill)
             drill.chain = max(1, min(int(asked or 1), drills.MAX_CHAIN))
             self.assertEqual(drill.chain, expected, board)
+
+
+class Themes(unittest.TestCase):
+    """What a position is about, computed from the best move and its line."""
+
+    def test_fork(self):
+        tags = themes.tag("r3k3/8/8/3N4/8/8/8/4K3 w - - 0 1", "d5c7", ["d5c7", "e8d8"])
+        self.assertIn("fork", tags)
+
+    def test_hanging_piece(self):
+        tags = themes.tag("4k3/8/8/3n4/8/8/8/3QK3 w - - 0 1", "d1d5", ["d1d5"])
+        self.assertIn("hanging_piece", tags)
+
+    def test_skewer(self):
+        tags = themes.tag("K7/8/8/8/8/2k4q/8/R7 w - - 0 1", "a1a3",
+                          ["a1a3", "c3d2", "a3h3"])
+        self.assertIn("skewer", tags)
+
+    def test_discovered_attack(self):
+        tags = themes.tag("1r2k3/8/8/8/8/8/1N6/1R2K3 w - - 0 1", "b2c4", ["b2c4"])
+        self.assertIn("discovered_attack", tags)
+
+    def test_sacrifice(self):
+        fen = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4"
+        tags = themes.tag(fen, "c4f7", ["c4f7", "e8f7", "f3e5"])
+        self.assertIn("sacrifice", tags)
+
+    def test_defensive_move(self):
+        fen = "rnb1kbnr/pppp1ppp/8/8/3qP3/2P5/PP3PPP/RNBQKBNR b KQkq - 0 4"
+        self.assertIn("defensive", themes.tag(fen, "d4d6", ["d4d6", "d2d4"]))
+
+    def test_back_rank_mate(self):
+        tags = themes.tag("6k1/5ppp/8/8/8/8/8/R5K1 w - - 0 1", "a1a8", ["a1a8"], 1)
+        self.assertIn("mate", tags)
+        self.assertIn("mate_in_1", tags)
+        self.assertIn("back_rank_mate", tags)
+
+    def test_a_pinned_pawn_is_not_a_pin(self):
+        fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
+        self.assertNotIn("pin", themes.tag(fen, "f1b5", ["f1b5", "c7c6"]))
+
+    def test_quiet_move(self):
+        fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        self.assertEqual(themes.tag(fen, "e2e4", ["e2e4", "e7e5"]), ["quiet"])
+
+    def test_illegal_or_missing_best_gives_nothing(self):
+        fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+        self.assertEqual(themes.tag(fen, None, []), [])
+        self.assertEqual(themes.tag(fen, "e2e5", []), [])
+
+
+class Accuracy(unittest.TestCase):
+    def test_lichess_curve(self):
+        self.assertAlmostEqual(review.move_accuracy(0), 100.0, places=1)
+        self.assertGreater(review.move_accuracy(5), review.move_accuracy(10))
+        self.assertLess(review.move_accuracy(50), 20)
+        self.assertEqual(review.move_accuracy(500), 0.0)
+
+
+class Statistics(unittest.TestCase):
+    """Both views must work on an empty database and on a full one."""
+
+    def test_views_on_an_empty_database(self):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(open(db.SCHEMA_PATH).read())
+        self.assertEqual(stats.games_view(conn)["coverage"]["reviewed"], 0)
+        self.assertEqual(stats.gym_view(conn)["overall"]["answers"], 0)
+
+    def test_views_on_the_real_database(self):
+        conn = db.init()
+        g, y = stats.games_view(conn), stats.gym_view(conn)
+        self.assertIn("coverage", g)
+        self.assertIn("overall", y)
+        for row in g.get("themes", []) + y.get("themes", []):
+            self.assertGreater(row["n"], 0)
+            self.assertTrue(0 <= (row["hit_rate"] or 0) <= 100)
 
 
 class Positions(unittest.TestCase):
