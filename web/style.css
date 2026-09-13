@@ -387,6 +387,11 @@ kbd {
 .bar .fill { height: 100%; background: var(--accent); border-radius: 5px; }
 .bar .fill.bad { background: var(--blunder); }
 .bar .n { color: var(--dim); font-size: 12px; text-align: right; }
+.bar .bar-label { background: none; border: 0; padding: 0; margin: 0; font: inherit;
+  color: inherit; text-align: left; cursor: help; text-decoration: underline dotted var(--dim);
+  text-underline-offset: 3px; }
+.bar .bar-label:hover { color: var(--accent); }
+.bar .bar-help { grid-column: 1 / -1; color: var(--dim); font-size: 12px; margin-top: -2px; }
 .radar-wrap { display: grid; grid-template-columns: minmax(260px, 420px) 1fr; gap: 16px;
   align-items: start; }
 .radar { width: 100%; height: auto; }

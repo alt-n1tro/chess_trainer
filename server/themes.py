@@ -37,6 +37,31 @@ LABELS.update({"opening": "Opening", "middlegame": "Middlegame",
                "endgame": "Endgame", "mate_in_1": "Mate in 1",
                "mate_in_2": "Mate in 2", "mate_in_3": "Mate in 3",
                "long_mate": "Long mate", "back_rank_mate": "Back-rank mate"})
+# One line each, for the statistics: every theme describes the move the
+# engine wanted from you, never something you did to yourself. A score is
+# how often you found that move when it was there.
+DESCRIPTIONS = {
+    "mate": "The engine had a forced mate for you. Did you play the mating line?",
+    "fork": "The best move attacks two things at once.",
+    "pin": "The best move pins an enemy piece to something more valuable behind it.",
+    "skewer": "The best move attacks a valuable piece so that the one behind it falls.",
+    "discovered_attack": "The best move moves a piece out of the way to unmask an attack.",
+    "hanging_piece": "Your opponent left a piece undefended or underdefended. Did you take it?",
+    "sacrifice": "The best move gives up material for a bigger gain in the line that follows.",
+    "defensive": "Something of yours was hanging and the best move saves it.",
+    "promotion": "The best move promotes a pawn, now or within the next three of your moves.",
+    "kingside_attack": "The best move lands next to, or checks, a king on the kingside.",
+    "queenside_attack": "The best move lands next to, or checks, a king on the queenside.",
+    "quiet": "No capture, no check, no tactic: the best move improves the position.",
+    "mate_in_1": "You had mate in one.",
+    "mate_in_2": "You had a forced mate in two.",
+    "mate_in_3": "You had a forced mate in three.",
+    "long_mate": "You had a forced mate in four or more, up to the review horizon of eleven.",
+    "back_rank_mate": "You had a mate in one against a king trapped on its back rank.",
+    "opening": "Moves up to the end of the opening.",
+    "middlegame": "Moves in the middlegame.",
+    "endgame": "Moves in the endgame.",
+}
 TACTICAL = {"fork", "pin", "skewer", "discovered_attack", "hanging_piece",
             "sacrifice", "mate", "promotion"}
 

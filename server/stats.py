@@ -156,6 +156,7 @@ def _theme_rows(found: dict) -> list[dict]:
     rows = []
     for t, f in found.items():
         rows.append({"theme": t, "label": themes.LABELS.get(t, t), "n": f["n"],
+                     "help": themes.DESCRIPTIONS.get(t),
                      "hit_rate": _pct(f["hit"], f["n"]),
                      "bad_rate": _pct(f["bad"], f["n"])})
     order = [t for t, _ in themes.THEMES] + ["mate_in_1", "mate_in_2", "mate_in_3",

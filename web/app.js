@@ -781,6 +781,11 @@ document.addEventListener("click", async (event) => {
         !event.target.closest("#top")) closeOverlays();
     return;
   }
+  if (hit.dataset.act === "bar-help") {
+    const why = hit.parentElement.querySelector(".bar-help");
+    if (why) why.hidden = !why.hidden;
+    return;
+  }
   if (hit.dataset.setChain) {
     closeOverlays();
     shownKey = null;
@@ -985,12 +990,16 @@ function tile(v, k) {
     `<div class="k">${k}</div></div>`;
 }
 
-function bar(label, value, n, bad) {
+function bar(label, value, n, bad, help) {
   const v = value === null || value === undefined ? 0 : value;
-  return `<div class="bar"><span>${esc(label)}</span>` +
+  const name = help
+    ? `<button class="bar-label" data-act="bar-help" title="What this counts">${esc(label)}</button>`
+    : `<span>${esc(label)}</span>`;
+  const why = help ? `<div class="bar-help" hidden>${esc(help)}</div>` : "";
+  return `<div class="bar">${name}` +
     `<div class="track"><div class="fill ${bad ? "bad" : ""}" style="width:${Math.max(0, Math.min(100, v))}%"></div></div>` +
     `<span class="n">${value === null || value === undefined ? "—" : v + "%"}` +
-    `${n !== undefined ? ` · ${n}` : ""}</span></div>`;
+    `${n !== undefined ? ` · ${n}` : ""}</span>${why}</div>`;
 }
 
 /** A radar of hit rates per theme. Axes with few samples are drawn thin. */
@@ -1073,12 +1082,14 @@ function gamesHtml(d) {
     `</div></div>`;
   html += `<div><h3>What you find, and what you miss</h3>` +
     `<div class="hint">When the engine's move was about a theme, how often you played it.` +
-    ` Thin labels have fewer than five samples.</div>` +
+    ` Thin labels have fewer than five samples. Click a name to see what it counts.</div>` +
     `<div class="radar-wrap">${radar(d.themes, "hit_rate")}<div class="bars">` +
-    (d.themes || []).map((t) => bar(t.label, t.hit_rate, `${t.n}`)).join("") + `</div></div></div>`;
+    (d.themes || []).map((t) => bar(t.label, t.hit_rate, `${t.n}`, false, t.help)).join("") + `</div></div></div>`;
   if ((d.allowed || []).length) {
-    html += `<div><h3>What your mistakes allowed</h3><div class="bars">` +
-      d.allowed.slice(0, 8).map((a) => bar(a.label, Math.min(100, a.n * 100 / d.allowed[0].n), `${a.n} times`, true)).join("") +
+    html += `<div><h3>What your mistakes allowed</h3>` +
+      `<div class="hint">After a mistake or blunder of yours, what the engine's reply for your opponent was about.` +
+      ` A hanging piece here is one you left for them to take.</div><div class="bars">` +
+      d.allowed.slice(0, 8).map((a) => bar(a.label, Math.round(Math.min(100, a.n * 100 / d.allowed[0].n)), `${a.n} times`, true)).join("") +
       `</div></div>`;
   }
   const ms = d.mates_summary || {};
@@ -1127,7 +1138,7 @@ function gymHtml(d) {
     "Where you leave memory and start calculating.");
   html += `<div><h3>By theme</h3><div class="hint">How often you found the move when the` +
     ` position was about a theme.</div><div class="radar-wrap">${radar(d.themes, "hit_rate")}` +
-    `<div class="bars">` + (d.themes || []).map((t) => bar(t.label, t.hit_rate, `${t.n}`)).join("") +
+    `<div class="bars">` + (d.themes || []).map((t) => bar(t.label, t.hit_rate, `${t.n}`, false, t.help)).join("") +
     `</div></div></div>`;
   html += section("By opening", d.by_opening, (r) => r.key || "?");
   if ((d.recent || []).length) {
