@@ -138,7 +138,7 @@ def cmd_import(args) -> int:
     if ids and not mine and not corpus.my_username(conn):
         print("None of these are marked as yours: run ./run whoami <username>"
               " and re-import, or they stay out of the phase pools.")
-    print("Next: ./run phases --build")
+    print("Next: ./run review")
     return 0
 
 
@@ -183,7 +183,7 @@ def _import_player(conn, args) -> int:
         "SELECT COUNT(*) n FROM games WHERE my_colour IS NOT NULL"
     ).fetchone()["n"]
     print(f"{mine} game(s) are yours and will feed the pools.")
-    print("Next: ./run phases --build")
+    print("Next: ./run review")
     return 0
 
 
@@ -201,93 +201,6 @@ def cmd_whoami(args) -> int:
     ).rowcount
     conn.commit()
     print(f"You are {args.username}. Re-tagged {n} stored game(s).")
-    return 0
-
-
-def cmd_phases(args) -> int:
-    """List the drill pools, or add games to them."""
-    conn = db.init()
-    if not args.build and not args.rebuild:
-        rows = conn.execute(
-            "SELECT phase, name, my_colour, eval_cp, tail_san FROM positions"
-            " ORDER BY phase, name, eval_cp"
-        ).fetchall()
-        if not rows:
-            print("No pools yet. ./run phases --build")
-            return 0
-        for phase in ("opening", "middlegame", "endgame"):
-            group = [r for r in rows if r["phase"] == phase]
-            print(f"\n{phase}  ({len(group)})")
-            for r in group:
-                ev = "    -" if r["eval_cp"] is None else f"{r['eval_cp']:+5d}"
-                print(f"  {ev}cp  {r['my_colour'][:1].upper()}  "
-                      f"{(r['name'] or '')[:28]:28s}  {r['tail_san'] or ''}")
-        return 0
-
-    games = conn.execute(
-        "SELECT COUNT(*) n FROM games WHERE my_colour IS NOT NULL"
-    ).fetchone()["n"]
-    if not games:
-        print("No games of yours are imported. ./run import --player <name>"
-              " first.", file=sys.stderr)
-        return 1
-    existing = conn.execute("SELECT COUNT(*) n FROM positions").fetchone()["n"]
-    if args.rebuild:
-        pending = games
-    else:
-        pending = conn.execute(
-            "SELECT COUNT(*) n FROM games g WHERE g.my_colour IS NOT NULL"
-            " AND NOT EXISTS (SELECT 1 FROM positions p WHERE p.source_game=g.id)"
-        ).fetchone()["n"]
-    if not pending:
-        print(f"All {games} game(s) are pooled already ({existing} positions)."
-              " --rebuild starts over.")
-        return 0
-    unreviewed = conn.execute(
-        "SELECT COUNT(*) n FROM games g WHERE g.my_colour IS NOT NULL"
-        " AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.game_id=g.id)"
-        + ("" if args.rebuild else
-           " AND NOT EXISTS (SELECT 1 FROM positions p WHERE p.source_game=g.id)")
-    ).fetchone()["n"]
-
-    lines = [
-        (f"Rebuild the pools from all {games} game(s), replacing the current"
-         f" {existing} position(s).") if args.rebuild else
-        (f"Add {pending} game(s) to the pools ({existing} positions already)."),
-        f"  - {pending - unreviewed} reviewed game(s) are pooled from their"
-        f" review: no engine time",
-    ]
-    if unreviewed:
-        lines.append(
-            f"  - {unreviewed} unreviewed game(s) are searched at depth"
-            f" {engine.DEPTH_FILTER}, survivors at {engine.DEPTH_GRADE}:"
-            f" roughly {_dur(unreviewed * 12)}")
-    if not confirm("\n".join(lines) + "\n", args.yes):
-        return 1
-
-    pool = None
-    if unreviewed:
-        info = engine.probe()
-        if not info["ok"]:
-            print(f"Engine not usable: {info.get('error')}", file=sys.stderr)
-            return 1
-        pool = engine.Pool()
-    bar = Progress(pending, "pooling")
-    try:
-        def progress(gi, total, examined):
-            bar.total = max(1, total)
-            bar.n = gi
-            bar.stage = f"game {gi + 1}/{total}, {examined} positions searched"
-            bar.draw()
-
-        counts = corpus.build_phases(conn, pool, progress=progress,
-                                     rebuild=args.rebuild)
-    finally:
-        bar.done()
-        if pool:
-            pool.close()
-    print(f"openings {counts['opening']}, middlegame {counts['middlegame']},"
-          f" endgame {counts['endgame']}  (from {counts['games']} game(s))")
     return 0
 
 
@@ -493,17 +406,6 @@ def main(argv=None) -> int:
                    help="review at most N games this run")
     p.add_argument("--yes", action="store_true", help="skip the confirmation")
     p.set_defaults(func=cmd_review)
-
-    p = sub.add_parser(
-        "phases", help="list the drill pools, or --build to add games to them",
-        description="Without flags, list the pooled positions. --build adds"
-                    " games not yet pooled: reviewed ones instantly, the rest"
-                    " with the engine. --rebuild starts over.")
-    p.add_argument("--build", action="store_true", help="add unpooled games")
-    p.add_argument("--rebuild", action="store_true",
-                   help="delete the pools and build them again from every game")
-    p.add_argument("--yes", action="store_true", help="skip the confirmation")
-    p.set_defaults(func=cmd_phases)
 
     p = sub.add_parser(
         "warm", help="pre-analyse pooled positions so drills never wait",

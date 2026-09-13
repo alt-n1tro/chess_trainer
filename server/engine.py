@@ -24,7 +24,6 @@ ENGINE_PATH = os.path.join(ROOT, "vendor", "stockfish")
 
 DEPTH_CANDIDATES = 20   # opponent's five candidate moves, MultiPV 5
 DEPTH_GRADE = 20        # grading your reply, MultiPV 1
-DEPTH_FILTER = 12       # shallow pass during phases --build
 MULTIPV_CANDIDATES = 5
 
 

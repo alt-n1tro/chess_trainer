@@ -22,7 +22,7 @@ cp /path/to/stockfish vendor/stockfish   # or: ln -s /usr/games/stockfish vendor
 chmod +x vendor/stockfish
 ./run doctor                             # engine, DB, venv, port
 ./run import --player <your-chess.com-username>   # all your rapid games
-./run phases --build                     # build the middlegame and endgame pools
+./run review                             # grade every move; fills the gym and the statistics
 ./run web                                # then open http://127.0.0.1:8770/
 ```
 
@@ -37,7 +37,6 @@ ever installed with sudo; if a step would need root, the app stops and says so.
 | `./run import --player <name>` | Import a chess.com player's whole history. `--time-class rapid` by default; also `blitz`, `bullet`, `daily`, a comma-separated list, or `all`. `--since YYYY-MM` skips older months. Re-running picks up only what is new. |
 | `./run import <pgn-or-url>` | Import a PGN file, a chess.com game link, or an archive URL. |
 | `./run review` | Engine-review your games: every move graded and tagged for the statistics, and each reviewed game's positions added to the drill pools. `--depth` is a floor (16); simple positions go much deeper within `--budget` seconds. Resumable; run it again after each import. |
-| `./run phases` | List the drill pools. `--build` adds games that are imported but not yet pooled — reviewed ones instantly, the rest with the engine. `--rebuild` starts over. |
 | `./run warm` | Pre-analyse pooled positions so drills never wait. |
 | `./run whoami [name]` | Show or set which chess.com name is you. `import --player` sets it the first time. |
 | `./run doctor` | Check the engine binary, database, venv and port. |
@@ -47,8 +46,8 @@ ever installed with sudo; if a step would need root, the app stops and says so.
 takes `--help`. Commands that take time say what they will do and wait for a
 yes; `--yes` skips the question. Everything that only reads never prompts.
 
-The usual order is import, review, web. Reviewing a game also pools it, so
-`phases --build` is only for games you imported and chose not to review.
+The usual order is import, review, web. A game joins the drill pools when it
+is reviewed.
 
 ## Keys
 

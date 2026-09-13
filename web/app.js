@@ -126,7 +126,7 @@ async function renderDrill(d) {
     el.status.textContent = "";
     el.context.innerHTML = `<h1>Nothing in this pool yet</h1>` +
       `<div class="meta">Import your games, then build the pools.</div>` +
-      `<div class="tail">./run import --player &lt;name&gt;<br>./run phases --build</div>`;
+      `<div class="tail">./run import --player &lt;name&gt;<br>./run review</div>`;
     el.progress.innerHTML = "";
     el.verdict.innerHTML = "";
     el.actions.innerHTML = rowOf([btnHtml("menu", "Open the menu"),
@@ -516,7 +516,7 @@ async function openMenu() {
       : "") +
     `<div class="sec">${state.mode === "openings" ? "Openings" : MODE_LABEL[state.mode]}</div>` +
     `<div class="rows">${rows || `<div class="row-item"><span class="meta">` +
-      `Nothing here yet — ./run phases --build</span></div>`}</div>` +
+      `Nothing here yet — ./run review</span></div>`}</div>` +
     (gameRows ? `<div class="sec">Your games</div><div class="rows">${gameRows}</div>` : ""));
   const search = $("search");
   search.focus();

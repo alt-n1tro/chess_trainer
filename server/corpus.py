@@ -1,6 +1,8 @@
-"""Game import, PGN parsing, phase extraction.
+"""Game import, PGN parsing, and the drill pools.
 
-Positions come from games. Nothing is hand-typed here.
+Positions come from games. Nothing is hand-typed here. A game joins the drill
+pools when it is reviewed: the review has evaluated every position, so the
+pools cost nothing extra.
 """
 from __future__ import annotations
 
@@ -16,7 +18,6 @@ import chess
 import chess.pgn
 
 from . import db
-from .engine import DEPTH_FILTER, DEPTH_GRADE
 
 GAMES_DIR = os.path.join(db.ROOT, "data", "games")
 UA = {"User-Agent": "chess-trainer/1.0 (local, single user)"}
@@ -26,7 +27,6 @@ UA = {"User-Agent": "chess-trainer/1.0 (local, single user)"}
 # skill.
 EVAL_LOW, EVAL_HIGH = -200, 250
 MAX_PER_GAME = 3
-MATERIAL_TOLERANCE = 1       # pawns
 
 VALUES = {chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
           chess.ROOK: 5, chess.QUEEN: 9}
@@ -382,30 +382,6 @@ def tail_san(node, count: int = 4) -> str:
     return " ".join(out)
 
 
-def candidate_positions(game: chess.pgn.Game, colour: str):
-    """Positions from one game worth considering for the pools.
-
-    Only positions where the opponent is to move -- that is the question.
-    """
-    me = chess.WHITE if colour == "white" else chess.BLACK
-    node = game
-    while node.variations:
-        node = node.variations[0]
-        board = node.board()
-        if board.turn == me:
-            continue                       # you to move: not a question
-        if board.is_game_over(claim_draw=True):
-            continue
-        phase = db.classify_phase(board)
-        if phase == "opening":
-            continue
-        if phase == "middlegame" and board.fullmove_number <= 10:
-            continue
-        if abs(material_balance(board, me)) > MATERIAL_TOLERANCE:
-            continue                       # material alone, first gate
-        yield node, board, phase
-
-
 def opening_node(game: chess.pgn.Game, colour: str):
     """Where an opening drill starts: the opponent to move, a few moves in."""
     me = chess.WHITE if colour == "white" else chess.BLACK
@@ -485,89 +461,6 @@ def _tail_from_pgn(game, ply: int, count: int = 4) -> str:
             break
         node = node.variations[0]
     return tail_san(node, count)
-
-
-def build_phases(conn, pool, progress=None, yes: bool = False,
-                 log=print, rebuild: bool = False) -> dict:
-    """Build the middlegame and endgame pools.
-
-    Reviewed games are pooled from their review, with no engine work. The
-    rest get the engine path: material within one pawn, then Stockfish at
-    depth 12, then depth 20 for survivors. Incremental by default -- games
-    already pooled are left alone -- and `rebuild` starts over.
-    """
-    if rebuild:
-        conn.execute("DELETE FROM positions")
-        conn.commit()
-    games = conn.execute(
-        "SELECT g.* FROM games g WHERE g.my_colour IS NOT NULL"
-        " AND NOT EXISTS (SELECT 1 FROM positions p WHERE p.source_game=g.id)"
-        " ORDER BY g.id"
-    ).fetchall()
-    counts = {"opening": 0, "middlegame": 0, "endgame": 0,
-              "examined": 0, "games": len(games)}
-
-    for gi, row in enumerate(games):
-        reviewed = conn.execute("SELECT 1 FROM reviews WHERE game_id=?",
-                                (row["id"],)).fetchone()
-        if reviewed:
-            got = pool_from_review(conn, row["id"])
-            counts["opening"] += 1
-            counts["middlegame"] += got.get("middlegame", 0)
-            counts["endgame"] += got.get("endgame", 0)
-            if progress:
-                progress(gi, len(games), counts["examined"])
-            continue
-        game = chess.pgn.read_game(io.StringIO(row["pgn"]))
-        if game is None:
-            continue
-        colour = row["my_colour"]
-        me = chess.WHITE if colour == "white" else chess.BLACK
-        family = opening_family(dict(game.headers))
-
-        node, board = opening_node(game, colour)
-        if node is not None:
-            _insert(conn, board, "opening", row["id"], node.ply(), None,
-                    tail_san(node), colour, family)
-            counts["opening"] += 1
-
-        survivors = []
-        for node, board, phase in candidate_positions(game, colour):
-            counts["examined"] += 1
-            if progress:
-                progress(gi, len(games), counts["examined"])
-            lines = pool.analyse(board, DEPTH_FILTER, 1, phase=phase)
-            if not lines:
-                continue
-            cp = _my_cp(lines[0], board, me)
-            if cp is None or not (EVAL_LOW - 60 <= cp <= EVAL_HIGH + 60):
-                continue
-            survivors.append((node, board, phase))
-
-        # Spread the keepers across the game so no single game dominates, and
-        # confirm the eval at full depth.
-        for node, board, phase in _spread(survivors, MAX_PER_GAME):
-            lines = pool.analyse(board, DEPTH_GRADE, 1, phase=phase)
-            if not lines:
-                continue
-            if lines[0].get("mate") is not None:
-                continue               # mate-in-N is excluded from both pools
-            cp = _my_cp(lines[0], board, me)
-            if cp is None or not (EVAL_LOW <= cp <= EVAL_HIGH):
-                continue
-            _insert(conn, board, phase, row["id"], node.ply(), cp,
-                    tail_san(node), colour, family)
-            counts[phase] += 1
-        conn.commit()
-    return counts
-
-
-def _my_cp(line: dict, board: chess.Board, me: bool):
-    """Cached lines score from the side to move; the pools score from yours."""
-    cp = line.get("cp")
-    if cp is None:
-        return None
-    return cp if board.turn == me else -cp
 
 
 def _spread(items: list, n: int) -> list:

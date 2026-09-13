@@ -354,10 +354,9 @@ def grading_tone(verdict: str) -> str | None:
 
 
 EMPTY_POOL = {
-    "openings": "No openings yet. Import games with ./run import <pgn-or-url>,"
-                " then ./run phases --build.",
-    "middlegame": "The middlegame pool is empty. Run ./run phases --build.",
-    "endgame": "The endgame pool is empty. Run ./run phases --build.",
+    "openings": "No openings yet. ./run import --player <name>, then ./run review.",
+    "middlegame": "No middlegames yet. Reviewed games fill this: ./run review.",
+    "endgame": "No endgames yet. Reviewed games fill this: ./run review.",
 }
 
 
