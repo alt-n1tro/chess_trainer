@@ -14,7 +14,7 @@ import time
 import chess
 
 from . import db, explain as explain_mod, grading, stats
-from .engine import DEPTH_CANDIDATES, DEPTH_GRADE, MULTIPV_CANDIDATES
+from .engine import DEPTH_CANDIDATES, DEPTH_GRADE, MULTIPV_CANDIDATES, MULTIPV_ROOT
 
 SESSION_ID = "local"          # one local user, one persistent session
 MAX_CHAIN = 5                 # what the selector offers
@@ -24,17 +24,15 @@ ROUNDS = MULTIPV_CANDIDATES
 RECENCY_COLD = 10             # the last 10 positions drawn: weight 0
 RECENCY_RAMP = 20             # ramp back to 1 over the following 20
 
-# How much the opponent is allowed to give up, in win-probability points, for
-# a move to be worth answering. The engine's second to fifth choices are only
-# near-equal in a quiet position; where one move dominates -- a hanging piece,
-# a forced recapture -- its fifth choice throws the game away, and drilling
-# against a blunder nobody would play teaches nothing. Same threshold as a
-# "mistake" in your own grading.
-OPPONENT_MAX_LOSS_WP = grading.MISTAKE_WP
-# And a material guard. Win probability is flat at extreme evaluations, so from
-# +9 a move to +5 costs only a few points -- but it is still a piece, and an
-# opponent who is winning does not hand one over.
-OPPONENT_MAX_LOSS_CP = 200.0
+# The opponent plays anything that is not a blunder. Weird moves, inaccurate
+# moves and outright mistakes all stay, because learning to punish them is the
+# point: a real opponent plays them. What goes is a move that throws the game
+# away -- a blunder by the same threshold as your own grading -- and, since
+# win probability is flat at extreme evaluations, anything that hands over a
+# piece regardless of the score.
+OPPONENT_MAX_LOSS_WP = grading.BLUNDER_WP
+OPPONENT_MAX_LOSS_CP = 300.0
+ROUNDS_PER_POSITION = 5
 
 MODES = ("openings", "middlegame", "endgame")
 MODE_PHASE = {"openings": "opening", "middlegame": "middlegame",
@@ -220,8 +218,9 @@ def _worst(tones: list[str]) -> str | None:
 
 def plausible_moves(candidates: list[dict],
                     max_loss: float = OPPONENT_MAX_LOSS_WP,
-                    max_cp: float = OPPONENT_MAX_LOSS_CP) -> list[dict]:
-    """Drop the moves the opponent would never play.
+                    max_cp: float = OPPONENT_MAX_LOSS_CP,
+                    keep: int = ROUNDS_PER_POSITION) -> list[dict]:
+    """The opponent's options: everything short of a blunder, up to `keep`.
 
     `candidates` are the engine's lines for the side to move, best first,
     scored from that side. A move goes if it gives up more than `max_loss`
@@ -242,6 +241,8 @@ def plausible_moves(candidates: list[dict],
                 and best.get("mate") != line.get("mate"):
             continue                     # walking into mate is never plausible
         kept.append(line)
+        if len(kept) >= keep:
+            break
     return kept or candidates[:1]
 
 
@@ -296,7 +297,7 @@ class Drill:
         one question, not five, four of which nobody would ever face.
         """
         lines = self.pool.analyse(self.board, DEPTH_CANDIDATES,
-                                  MULTIPV_CANDIDATES, phase=self.phase)
+                                  MULTIPV_ROOT, phase=self.phase)
         out = []
         for line in lines:
             try:
@@ -416,7 +417,7 @@ class Drill:
                 except (ValueError, AssertionError):
                     continue
                 jobs.append((b2.fen(), DEPTH_GRADE, 1))
-                jobs.append((b2.fen(), DEPTH_CANDIDATES, MULTIPV_CANDIDATES))
+                jobs.append((b2.fen(), DEPTH_CANDIDATES, MULTIPV_ROOT))
         if self.chain > 1:                       # 3. where a chain will go
             for cand in self.candidates[:2]:
                 probe = self.board.copy(stack=False)
@@ -456,7 +457,7 @@ class Drill:
         rows = self.conn.execute(
             "SELECT p.fen FROM positions p"
             " LEFT JOIN analysis a ON a.pos_hash = p.pos_hash"
-            "   AND a.depth = ? AND a.multipv = ?"
+            "   AND a.depth >= ? AND a.multipv >= ?"
             " LEFT JOIN (SELECT pos_hash, COUNT(*) seen,"
             f"            SUM(verdict IN {_MISS_SQL}) misses"
             "            FROM answers GROUP BY pos_hash) s"
@@ -464,9 +465,9 @@ class Drill:
             " WHERE p.phase = ? AND a.pos_hash IS NULL"
             " ORDER BY COALESCE(s.misses, 0) DESC, COALESCE(s.seen, 0) ASC"
             " LIMIT ?",
-            (DEPTH_CANDIDATES, MULTIPV_CANDIDATES, phase, limit),
+            (DEPTH_CANDIDATES, MULTIPV_ROOT, phase, limit),
         ).fetchall()
-        return [(r["fen"], DEPTH_CANDIDATES, MULTIPV_CANDIDATES) for r in rows]
+        return [(r["fen"], DEPTH_CANDIDATES, MULTIPV_ROOT) for r in rows]
 
     # -- answering
     def my_lines(self) -> list[dict]:

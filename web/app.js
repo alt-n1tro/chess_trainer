@@ -240,12 +240,19 @@ function renderContext(d) {
 function playersLine(g) {
   const w = `${esc(g.white || "?")}${g.white_elo ? ` (${g.white_elo})` : ""}`;
   const b = `${esc(g.black || "?")}${g.black_elo ? ` (${g.black_elo})` : ""}`;
-  const res = g.result ? ` · ${esc(g.result)}` : "";
+  const res = g.result ? ` \u00b7 ${esc(g.result)}` : "";
+  let text;
   if (g.my_colour === "white")
-    return `<span class="you">You</span> (White${g.white_elo ? `, ${g.white_elo}` : ""}) vs ${b}${res}`;
-  if (g.my_colour === "black")
-    return `${w} vs <span class="you">you</span> (Black${g.black_elo ? `, ${g.black_elo}` : ""})${res}`;
-  return `${w} vs ${b}${res} · not your game`;
+    text = `<span class="you">You</span> (White${g.white_elo ? `, ${g.white_elo}` : ""}) vs ${b}${res}`;
+  else if (g.my_colour === "black")
+    text = `${w} vs <span class="you">you</span> (Black${g.black_elo ? `, ${g.black_elo}` : ""})${res}`;
+  else
+    text = `${w} vs ${b}${res} \u00b7 not your game`;
+  // The line is the game: click it to open the game on chess.com.
+  return g.url && /^https?:\/\//.test(g.url)
+    ? `<a class="game-link" href="${esc(g.url)}" target="_blank" rel="noopener noreferrer"` +
+      ` title="Open this game on chess.com">${text} \u2197</a>`
+    : text;
 }
 
 function renderProgress(d) {

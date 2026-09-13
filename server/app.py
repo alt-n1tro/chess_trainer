@@ -44,6 +44,8 @@ class Trainer:
             self.chain = 1
         self.stack: list[Drill] = []
         self.game = None            # game-walk state, when one is loaded
+        # Pools built under an older rule are rebuilt from the reviews; cheap.
+        corpus.repool_reviewed(self.conn)
 
     # -- helpers
     @property

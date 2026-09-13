@@ -435,14 +435,35 @@ def pool_from_review(conn, game_id: int) -> dict:
         if not WP_LOW <= my_wp <= WP_HIGH:
             continue
         survivors.append((r, board))
+    # Up to three per phase, spread across that phase. One shared cap across
+    # the whole game would land almost every pick in the middlegame, because
+    # the endgame is always the tail of the list.
     counts = {"middlegame": 0, "endgame": 0}
-    for r, board in _spread(survivors, MAX_PER_GAME):
-        cp = int(round(_cp_from_wp(100.0 - (r["wp_before"] or 50.0))))
-        _insert(conn, board, r["phase"], game_id, r["ply"], cp,
-                _tail_from_pgn(pgn, r["ply"]), game["my_colour"], family)
-        counts[r["phase"]] += 1
+    for phase in counts:
+        mine = [(r, b) for r, b in survivors if r["phase"] == phase]
+        for r, board in _spread(mine, MAX_PER_GAME):
+            cp = int(round(_cp_from_wp(100.0 - (r["wp_before"] or 50.0))))
+            _insert(conn, board, phase, game_id, r["ply"], cp,
+                    _tail_from_pgn(pgn, r["ply"]), game["my_colour"], family)
+            counts[phase] += 1
     conn.commit()
     return counts
+
+
+POOL_RULE = "per-phase-3"
+
+
+def repool_reviewed(conn) -> int:
+    """Re-pool every reviewed game under the current rule. No engine work,
+    and idempotent: run whenever the pooling rule changes."""
+    if db.meta_get(conn, "pool_rule") == POOL_RULE:
+        return 0
+    n = 0
+    for g in conn.execute("SELECT game_id FROM reviews").fetchall():
+        pool_from_review(conn, g["game_id"])
+        n += 1
+    db.meta_set(conn, "pool_rule", POOL_RULE)
+    return n
 
 
 def _cp_from_wp(wp: float) -> float:

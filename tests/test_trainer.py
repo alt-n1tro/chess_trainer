@@ -133,9 +133,15 @@ class OpponentMoves(unittest.TestCase):
         self.assertEqual([c["move"] for c in kept], ["a1a2"])
 
     def test_mistakes_are_still_allowed(self):
-        """A real opponent does drop 80cp; that is worth punishing."""
-        kept = drills.plausible_moves(self.lines(0, -80))
-        self.assertEqual(len(kept), 2)
+        """A real opponent plays weird moves and outright mistakes; learning
+        to punish them is the point. Only blunders are withheld."""
+        kept = drills.plausible_moves(self.lines(0, -80, -150))
+        self.assertEqual(len(kept), 3)
+
+    def test_at_most_five_of_the_eight_candidates(self):
+        kept = drills.plausible_moves(self.lines(20, 15, 10, 5, 0, -5, -10, -15))
+        self.assertEqual(len(kept), 5)
+        self.assertEqual(kept[0]["move"], "a1a2")
 
     def test_blunders_are_not(self):
         kept = drills.plausible_moves(self.lines(0, -400))
@@ -300,6 +306,31 @@ class Pools(unittest.TestCase):
         # every pooled position has the opponent to move
         for r in conn.execute("SELECT fen FROM positions WHERE phase != 'opening'"):
             self.assertEqual(chess.Board(r["fen"]).turn, chess.BLACK)
+
+    def test_endgames_are_pooled_even_after_a_long_middlegame(self):
+        """The cap is per phase. One cap across the game would spend every
+        pick on the middlegame, because the endgame is always the tail."""
+        conn = self._db()
+        conn.execute("INSERT INTO games(id, pgn, my_colour) VALUES(1, '1. e4 *', 'white')")
+        conn.execute("INSERT INTO reviews(game_id, depth, engine_ver, reviewed_at, plies)"
+                     " VALUES(1, 16, 'test', 0, 80)")
+        mid = "r1bq1rk1/pp2bppp/2n1pn2/3p4/2PP4/2N2NP1/PP2PPBP/R2Q1RK1 b - - 0 11"
+        end = "8/5pk1/6p1/8/3R4/6P1/5PK1/3r4 b - - 0 40"
+        ply = 20
+        for _ in range(12):                          # a long, level middlegame
+            conn.execute("INSERT INTO review_moves(game_id, ply, is_me, fen, move, wp_before,"
+                         " verdict, phase, themes) VALUES(1,?,0,?,'a7a6',50.0,'best','middlegame','[]')",
+                         (ply, mid))
+            ply += 2
+        for _ in range(3):                           # then a level rook ending
+            conn.execute("INSERT INTO review_moves(game_id, ply, is_me, fen, move, wp_before,"
+                         " verdict, phase, themes) VALUES(1,?,0,?,'d1d2',50.0,'best','endgame','[]')",
+                         (ply, end))
+            ply += 2
+        conn.commit()
+        counts = corpus.pool_from_review(conn, 1)
+        self.assertGreaterEqual(counts["endgame"], 1)
+        self.assertLessEqual(counts["middlegame"], 3)
 
     def test_a_lost_game_pools_nothing(self):
         conn = self._db()

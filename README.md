@@ -124,17 +124,21 @@ point.
 
 ## What the opponent plays
 
-The engine's top five, minus the ones a real opponent would never play. Its
-second to fifth choices are only near-equal in a quiet position; where one move
-dominates — a hanging piece, a forced recapture — its fifth choice throws the
-game away, and drilling against a blunder nobody would play teaches nothing.
+Anything short of a blunder. From the engine's top eight the opponent gets up
+to five moves, in a random order that uses them all before repeating: the best
+move, the near-equal alternatives, and the weird, inaccurate and outright
+mistaken ones too, because a real opponent plays those and learning to punish
+them is the point.
 
-A candidate is dropped if it gives up more than 10 points of win probability,
-or more than 200 centipawns, against the opponent's own best move, or if it
-walks into mate. So a quiet position asks five questions and a position with
-one good move asks one — the panel says which, as *Position 2 of 5* or
-*Position 1 of 1*. Both thresholds are constants at the top of
-`server/drills.py` if you want a busier or a quieter opponent.
+What is withheld is a move that throws the game away — more than 20 points of
+win probability against the opponent's own best, or a whole piece, or walking
+into mate. Where one move dominates, a position asks fewer questions; the
+panel says how many, as *Position 2 of 5* or *Position 1 of 1*. The thresholds
+are constants at the top of `server/drills.py`.
+
+Each reviewed game gives the pools up to three middlegame and three endgame
+positions, spread across each phase, so long games still contribute their
+endings.
 
 ## Verdicts
 

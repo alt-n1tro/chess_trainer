@@ -24,7 +24,8 @@ ENGINE_PATH = os.path.join(ROOT, "vendor", "stockfish")
 
 DEPTH_CANDIDATES = 20   # opponent's five candidate moves, MultiPV 5
 DEPTH_GRADE = 20        # grading your reply, MultiPV 1
-MULTIPV_CANDIDATES = 5
+MULTIPV_CANDIDATES = 5  # for ranking your reply
+MULTIPV_ROOT = 8        # the opponent's options, before blunders are dropped
 
 
 class EngineMissing(RuntimeError):
@@ -177,9 +178,11 @@ class Pool:
         conn = db.connect(self.db_path)
         # Anything at least this deep answers the question; the deepest wins.
         # Shallower never does: a lookup at 20 that finds only 12 is a miss.
+        # A wider entry is a superset of a narrower one, so it serves too.
         row = conn.execute(
             "SELECT lines, depth FROM analysis WHERE pos_hash=? AND depth>=?"
-            " AND multipv=? AND engine_ver=? ORDER BY depth DESC LIMIT 1",
+            " AND multipv>=? AND engine_ver=? ORDER BY depth DESC, multipv DESC"
+            " LIMIT 1",
             (db.pos_hash(board, phase), depth, multipv, self.version),
         ).fetchone()
         if not row:

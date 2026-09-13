@@ -425,3 +425,6 @@ kbd {
 .movelist .v.inaccuracy { background: var(--inaccuracy); }
 .movelist .v.mistake { background: var(--mistake); }
 .movelist .v.blunder { background: var(--blunder); } .movelist .v.shown { background: var(--shown); }
+
+.game-link { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--line); }
+.game-link:hover { color: var(--accent); border-bottom-color: var(--accent); }
