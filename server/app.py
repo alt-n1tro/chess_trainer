@@ -106,7 +106,7 @@ class Trainer:
         if len(self.stack) > 1:
             self.stack.pop()
         elif self.drill is not None:
-            self.drill.reset()
+            self.drill.replay()
         return self.drill
 
     def start(self) -> Drill | None:
@@ -487,7 +487,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/reset":
             if t.drill is None:
                 raise ValueError("no drill in progress")
-            t.drill.reset()
+            t.drill.replay()
+            return self.json(t.state())
+
+        if path == "/api/restart":
+            if t.drill is None:
+                raise ValueError("no drill in progress")
+            t.drill.restart()
             return self.json(t.state())
 
         if path == "/api/back":

@@ -36,6 +36,11 @@ usage() {
 
   web                     Start the server on 127.0.0.1:8770
   import <pgn-or-url>     Import a game or a PGN archive into the corpus
+  import --player <name> [--time-class rapid] [--since YYYY-MM]
+                          Import a chess.com player's whole history for one
+                          time control. rapid by default; also blitz, bullet,
+                          daily, a comma-separated list, or all. Re-running
+                          picks up only what is new.
   phases --build          Rebuild the middlegame and endgame pools
   phases                  List the current pools with their evals
   tree                    Print recorded answers, per position and depth
@@ -43,6 +48,7 @@ usage() {
   warm                    Pre-analyse everything not yet cached
   doctor                  Check engine, DB, venv, port
   whoami <username>       Record which chess.com name is you
+  test                    Run the test suite
 
 Read-only commands take flags and never prompt. warm and phases --build
 confirm before starting; --yes skips the gate.
@@ -57,6 +63,10 @@ case "$cmd" in
     web|import|phases|tree|leaks|warm|doctor|whoami)
         ensure_venv
         exec "$PY" -m server.cli "$cmd" "$@"
+        ;;
+    test)
+        ensure_venv
+        exec "$PY" -m unittest discover -s tests -v "$@"
         ;;
     *)
         echo "Unknown command: $cmd" >&2

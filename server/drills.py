@@ -288,9 +288,20 @@ class Drill:
         if 0 <= which < len(self.candidates) and which in self.order:
             self.start_round(self.order.index(which))
 
-    def reset(self) -> None:
-        """Restart this position from round one. It replays this position; it
-        never fetches a fresh one."""
+    def replay(self) -> None:
+        """Put the question back exactly as it was asked: the same position,
+        the same opponent move, your answer cleared. It never draws a
+        different move and never fetches a fresh position."""
+        rs = self.round_state
+        if rs is None:
+            return self.restart()
+        rs["answer"] = None
+        self.results[self.index] = None
+        self._warm()
+
+    def restart(self) -> None:
+        """Start this position again from round one, reshuffling which of the
+        opponent's five moves comes first."""
         self.order = self._order()
         self.results = [None] * len(self.order)
         self.start_round(0)
@@ -302,15 +313,19 @@ class Drill:
             b = self.board.copy(stack=False)
             b.push(chess.Move.from_uci(cand["uci"]))
             jobs.append((b.fen(), DEPTH_GRADE, MULTIPV_CANDIDATES))
-        for cand in self.candidates[:2]:         # 2. grandchildren, top 2
+        for cand in self.candidates:             # 2. what grading will need
             b = self.board.copy(stack=False)
             b.push(chess.Move.from_uci(cand["uci"]))
-            for line in self.pool.cached(b, DEPTH_GRADE, MULTIPV_CANDIDATES) or []:
+            cached = self.pool.cached(b, DEPTH_GRADE, MULTIPV_CANDIDATES) or []
+            for line in cached[:1]:
+                # The position after the best reply: grading measures your
+                # move against this one, so it must not be a fresh search.
                 try:
                     b2 = b.copy(stack=False)
                     b2.push(chess.Move.from_uci(line["move"]))
                 except (ValueError, AssertionError):
                     continue
+                jobs.append((b2.fen(), DEPTH_GRADE, 1))
                 jobs.append((b2.fen(), DEPTH_CANDIDATES, MULTIPV_CANDIDATES))
         jobs.extend(self._queue_jobs())          # 3. and 4.
         self.pool.warm(jobs)
@@ -350,6 +365,22 @@ class Drill:
         lines = self.my_lines()
         return lines[0] if lines else None
 
+    def _eval_after(self, board: chess.Board, move: chess.Move):
+        """What the position is worth to you once this move is played.
+
+        Returns (evaluation from your side, the position after the move).
+        """
+        after = board.copy(stack=False)
+        after.push(move)
+        done = _outcome(after)
+        if done is not None:
+            return done, after
+        lines = self.pool.analyse(after, DEPTH_GRADE, 1,
+                                  phase=db.classify_phase(after))
+        if not lines:
+            return {"wp": 50.0, "cp": 0, "mate": None, "pv": []}, after
+        return _flip(lines[0]), after
+
     def answer(self, uci: str) -> dict:
         rs = self.round_state
         if rs is None:
@@ -365,30 +396,29 @@ class Drill:
         lines = self.my_lines()
         if not lines:
             raise RuntimeError("no engine evaluation for this position")
-        best = lines[0]
         rank = grading.rank_of(lines, move.uci())
+        best_move = chess.Move.from_uci(lines[0]["move"])
 
-        after = board.copy(stack=False)
-        after.push(move)
+        # Both moves are judged the same way: by the position each one leads
+        # to, searched to the same depth. Scoring your move from a MultiPV
+        # list when it happens to be in one, and from a fresh search when it
+        # is not, compares two different yardsticks -- worth a couple of win
+        # probability points, which is the difference between "second best"
+        # and "inaccuracy".
+        best_eval, _ = self._eval_after(board, best_move)
+        if move == best_move:
+            mine, after = dict(best_eval), board.copy(stack=False)
+            after.push(move)
+        else:
+            mine, after = self._eval_after(board, move)
         after_phase = db.classify_phase(after)
-        mine = _outcome(after)
-        if mine is None:
-            lines_after = self.pool.analyse(after, DEPTH_GRADE, 1,
-                                            phase=after_phase)
-            mine = (_flip(lines_after[0]) if lines_after
-                    else {"wp": 50.0, "cp": 0, "mate": None, "pv": []})
-        ranked = next((l for l in lines if l["move"] == move.uci()), None)
-        if ranked is not None:
-            # The engine already searched this move: use its own number rather
-            # than a second evaluation of the position after it.
-            mine = dict(ranked)
-        result = grading.grade(best, mine, rank)
+        result = grading.grade(best_eval, mine, rank)
 
-        best_san = board.san(chess.Move.from_uci(best["move"]))
+        best_san = board.san(best_move)
         exp = explain_mod.explain(
-            rs["fen"], move.uci(), best["move"],
+            rs["fen"], move.uci(), best_move.uci(),
             {"mine": [move.uci()] + (mine.get("pv") or []),
-             "best": best.get("pv") or [best["move"]]},
+             "best": [best_move.uci()] + (best_eval.get("pv") or [])},
         )
 
         my_node = tree_touch(self.conn, self.root_hash, rs["node_id"],
@@ -397,8 +427,8 @@ class Drill:
         self.results[self.index] = result["tone"]
         rs["answer"] = {
             "my_move": move.uci(), "my_san": san,
-            "best_move": best["move"], "best_san": best_san,
-            "wp_best": best["wp"], "wp_mine": mine.get("wp"),
+            "best_move": best_move.uci(), "best_san": best_san,
+            "wp_best": best_eval["wp"], "wp_mine": mine.get("wp"),
             "my_node": my_node, "fen_after": after.fen(),
             "explanation": exp.to_json(), **result,
         }
@@ -415,20 +445,19 @@ class Drill:
         if best is None:
             raise RuntimeError("no engine evaluation for this position")
         move = chess.Move.from_uci(best["move"])
-        after = board.copy(stack=False)
-        after.push(move)
+        best_eval, after = self._eval_after(board, move)
         self._record(rs, None, "shown", None)
         self.results[self.index] = "shown"
         rs["answer"] = {
             "my_move": None, "my_san": None,
             "best_move": best["move"], "best_san": board.san(move),
-            "wp_best": best["wp"], "wp_mine": None,
+            "wp_best": best_eval["wp"], "wp_mine": None,
             "verdict": "shown", "label": grading.LABELS["shown"],
             "delta_wp": None, "delta_cp": None,
             "fen_after": after.fen(),
             "explanation": explain_mod.explain(
                 rs["fen"], None, best["move"],
-                {"mine": [], "best": best.get("pv") or [best["move"]]},
+                {"mine": [], "best": [move.uci()] + (best_eval.get("pv") or [])},
             ).to_json(),
         }
         return rs["answer"]

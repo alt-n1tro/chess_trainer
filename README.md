@@ -42,6 +42,7 @@ ever installed with sudo; if a step would need root, the app stops and says so.
 | `./run leaks` | Print the current leak list. |
 | `./run warm` | Pre-analyse everything not yet cached. Long-running. |
 | `./run doctor` | Check engine binary, DB integrity, venv, port availability. |
+| `./run test` | Run the test suite. |
 | `./run whoami <name>` | Record which chess.com name is you, and re-tag stored games. |
 
 `--player` walks every monthly archive oldest first and skips games already
@@ -76,6 +77,16 @@ and on move 40. Your move is looked up in the engine's own ordered list:
 
 Damage outranks position in the list: the engine's second choice is still called
 a blunder if it throws the game away.
+
+Both your move and the engine's are measured the same way — by the position
+each one leads to, searched to the same depth — so playing the engine's move
+always scores exactly zero, and a move outside its top five is not judged by a
+different yardstick than one inside it.
+
+**Replay** puts the same question back: the same position, the same opponent
+move, your answer cleared. It never draws a different move. **Drill from here**
+takes the position you just reached and asks the same question one level
+deeper, with the opponent to move.
 
 ## How it is put together
 

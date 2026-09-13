@@ -56,9 +56,11 @@ def line_wp(line: dict) -> float:
 
 def with_wp(lines: list[dict]) -> list[dict]:
     """Recompute wp on every read, so entries cached under an older rule are
-    graded by the current one without invalidating the cache."""
+    graded by the current one without invalidating the cache. Entries written
+    before the sort above are re-sorted here for the same reason."""
     for line in lines:
         line["wp"] = line_wp(line)
+    lines.sort(key=_rank_key, reverse=True)
     return lines
 
 
@@ -134,8 +136,22 @@ def _lines_from_info(board: chess.Board, infos, multipv: int) -> list[dict]:
         }
         line["wp"] = line_wp(line)
         out.append(line)
+    # Sort by score. MultiPV slots are refreshed at different points inside
+    # the final iteration, so the engine's own slot order can disagree with
+    # the scores it last reported for them -- and then "the best move" would
+    # be whichever line happened to be refreshed first.
     out = [l for l in out if l["move"]]
+    out.sort(key=_rank_key, reverse=True)
     return out[:multipv]
+
+
+def _rank_key(line: dict) -> float:
+    """How good a line is, from the side to move. Mate beats any centipawn
+    score; mate against is worse than any of them."""
+    mate = line.get("mate")
+    if mate is not None:
+        return 1e6 - mate if mate > 0 else -1e6 - mate
+    return float(line.get("cp") or 0)
 
 
 class Pool:
