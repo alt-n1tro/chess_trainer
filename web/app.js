@@ -440,9 +440,14 @@ async function renderGame(g) {
   const last = g.ply > 0 ? g.moves[g.ply - 1] : null;
   markers(last ? [[last.uci.slice(0, 2), MARKER_MOVE], [last.uci.slice(2, 4), MARKER_MOVE]] : [], true);
   document.body.dataset.turn = g.ply % 2 === 0 ? "white" : "black";
-  el.status.textContent = last
-    ? `${last.number}${last.white ? "." : "..."} ${last.san}`
-    : "Start of the game";
+  let status = last ? `${last.number}${last.white ? "." : "..."} ${last.san}` : "Start of the game";
+  if (last && last.verdict) {
+    const who = last.is_me ? "you" : "they";
+    status += ` \u2014 ${who} played ${esc(last.san)}: ${verdictLabel(last.verdict)}`;
+    if (last.best_san && last.best_san !== last.san) status += `, best was ${last.best_san}`;
+    if (last.mate_in) status += ` (mate in ${last.mate_in} ${last.kept_mate ? "kept" : "missed"})`;
+  }
+  el.status.textContent = status;
 
   el.context.innerHTML =
     `<div class="players">${playersLine(g)}</div>` +
@@ -450,13 +455,20 @@ async function renderGame(g) {
     `<div class="meta">${esc(g.result || "")} · ${g.moves.length} plies` +
     ` · working from ${g.colour}</div>`;
   el.progress.innerHTML = "";
-  el.verdict.innerHTML = `<div class="movelist">` + g.moves.map((m, i) => {
+  el.verdict.innerHTML =
+    (g.reviewed ? `<div class="hint">Reviewed at depth ${g.review_depth}` +
+      (g.accuracy !== null ? ` \u00b7 your accuracy ${g.accuracy}%` : "") +
+      `. Coloured marks are verdicts; click a move to see it.</div>` : "") +
+    `<div class="movelist">` + g.moves.map((m, i) => {
     const num = m.white ? `<span class="num">${m.number}.</span>` : "";
+    const mark = m.tone ? `<i class="v ${m.tone}"></i>` : "";
     return `${num}<span class="mv ${i + 1 === g.ply ? "on" : ""}" data-ply="${i + 1}">` +
-      `${esc(m.san)}</span>`;
+      `${esc(m.san)}${mark}</span>`;
   }).join(" ") + `</div>`;
+  const drillable = last && last.is_me && last.review_id && last.verdict !== "best"
+    ? [`<button data-act="gdrill" data-id="${last.review_id}">Drill this moment</button>`] : [];
   el.actions.innerHTML =
-    rowOf([btnHtml("gplay", "Play from here", false, "primary")]) +
+    rowOf([btnHtml("gplay", "Play from here", false, "primary"), ...drillable]) +
     rowOf([btnHtml("gstart", "⇤"), btnHtml("gprev", "←"),
            btnHtml("gnext", "→"), btnHtml("gend", "⇥"),
            btnHtml("gcolour", g.colour === "white" ? "As White" : "As Black")], "small") +
@@ -468,8 +480,19 @@ async function renderGame(g) {
 // --- menu, help, editor ----------------------------------------------------
 
 async function openMenu() {
-  const [groups, saved] = await Promise.all([call("/api/groups", {}), call("/api/saved", {})]);
+  const [groups, saved, games] = await Promise.all([
+    call("/api/groups", {}), call("/api/saved", {}), call("/api/games", {})]);
   if (!groups) return;
+  const gameRows = ((games && games.games) || []).slice(0, 60).map((g) => {
+    const opp = g.my_colour === "white" ? g.black : g.white;
+    const res = g.result === "1/2-1/2" ? "\u00bd"
+      : ((g.my_colour === "white") === (g.result === "1-0") ? "won" : "lost");
+    const acc = g.accuracy !== null && g.accuracy !== undefined ? `${g.accuracy}%` : "not reviewed";
+    return `<div class="row-item find" data-act="open-game" data-id="${g.id}">` +
+      `<span class="t">${esc(opp || "?")} <span class="meta">as ${g.my_colour}` +
+      ` \u00b7 ${res}${g.opening ? " \u00b7 " + esc(g.opening) : ""}</span></span>` +
+      `<span class="meta">${acc}</span></div>`;
+  }).join("");
   const rows = (groups.groups || []).map((g) => {
     const sides = Object.entries(g.colours).filter(([c]) => c).map(([c, n]) =>
       `<button data-act="group" data-name="${esc(g.name)}" data-colour="${c}">` +
@@ -493,7 +516,8 @@ async function openMenu() {
       : "") +
     `<div class="sec">${state.mode === "openings" ? "Openings" : MODE_LABEL[state.mode]}</div>` +
     `<div class="rows">${rows || `<div class="row-item"><span class="meta">` +
-      `Nothing here yet — ./run phases --build</span></div>`}</div>`);
+      `Nothing here yet — ./run phases --build</span></div>`}</div>` +
+    (gameRows ? `<div class="sec">Your games</div><div class="rows">${gameRows}</div>` : ""));
   const search = $("search");
   search.focus();
   search.addEventListener("input", () => {
@@ -832,6 +856,10 @@ document.addEventListener("click", async (event) => {
       return;
     }
     case "gclose": shownKey = null; return void call("/api/random", {});
+    case "open-game": closeOverlays(); shownKey = null;
+      return void call("/api/game/open", { id: Number(hit.dataset.id) });
+    case "gdrill": closeOverlays(); shownKey = null;
+      return void call("/api/drill/review", { id: Number(hit.dataset.id) });
     default: return;
   }
 });
@@ -1084,6 +1112,13 @@ function gymHtml(d) {
       d.recent.map((v) => `<span class="${v}"></span>`).join("") + `</div></div>`;
   }
   return html;
+}
+
+function verdictLabel(v) {
+  return ({ best: "best move", second: "second best", third: "third best",
+    fourth: "fourth best", fifth: "fifth best", good: "good move",
+    inaccuracy: "inaccuracy", mistake: "mistake", blunder: "blunder",
+    missed_mate: "missed mate", shown: "shown" })[v] || v;
 }
 
 function esc(text) {

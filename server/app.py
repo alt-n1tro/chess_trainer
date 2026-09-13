@@ -223,6 +223,13 @@ class Trainer:
         return out
 
     # -- game walk
+    def open_game(self, game_id: int) -> dict:
+        row = self.conn_t().execute("SELECT * FROM games WHERE id=?",
+                                    (game_id,)).fetchone()
+        if row is None:
+            raise LookupError("no such game")
+        return self._load_row(row)
+
     def load_game(self, url_or_pgn: str) -> dict:
         conn = self.conn_t()
         url = corpus.canonical_url(url_or_pgn.strip())
@@ -237,6 +244,10 @@ class Trainer:
             if not ids:
                 raise LookupError("That is not a PGN and not a chess.com game link.")
             row = conn.execute("SELECT * FROM games WHERE id=?", (ids[0],)).fetchone()
+        return self._load_row(row)
+
+    def _load_row(self, row) -> dict:
+        conn = self.conn_t()
         game = chess.pgn.read_game(io.StringIO(row["pgn"]))
         if game is None:
             raise LookupError("The stored PGN will not parse.")
@@ -252,8 +263,35 @@ class Trainer:
                           "phase": db.classify_phase(board)})
             board.push(node.move)
         colour = row["my_colour"] or "white"
+        # The review, when there is one: a verdict per move.
+        review_rows = conn.execute(
+            "SELECT id, ply, is_me, verdict, delta_wp, best, accuracy, mate_in,"
+            " kept_mate FROM review_moves WHERE game_id=? ORDER BY ply",
+            (row["id"],)).fetchall()
+        for r in review_rows:
+            i = r["ply"] - 1
+            if 0 <= i < len(moves):
+                m = moves[i]
+                m["review_id"] = r["id"]
+                m["is_me"] = bool(r["is_me"])
+                m["verdict"] = r["verdict"]
+                m["tone"] = grading_tone(r["verdict"])
+                m["delta_wp"] = r["delta_wp"]
+                m["accuracy"] = r["accuracy"]
+                m["mate_in"] = r["mate_in"]
+                m["kept_mate"] = r["kept_mate"]
+                try:
+                    b = chess.Board(m["fen_before"])
+                    m["best_san"] = b.san(chess.Move.from_uci(r["best"])) if r["best"] else None
+                except (ValueError, AssertionError):
+                    m["best_san"] = r["best"]
+        rev = conn.execute("SELECT accuracy, depth FROM reviews WHERE game_id=?",
+                           (row["id"],)).fetchone()
         self.game = {
             "id": row["id"], "url": row["url"],
+            "reviewed": rev is not None,
+            "accuracy": rev["accuracy"] if rev else None,
+            "review_depth": rev["depth"] if rev else None,
             "white": row["white"], "black": row["black"],
             "white_elo": row["white_elo"], "black_elo": row["black_elo"],
             "result": row["result"], "my_colour": row["my_colour"],
@@ -308,6 +346,11 @@ class Trainer:
             "url": self.game["url"]}}
         drill = self.new_drill(state["fen"], name=None, source=label)
         return drill
+
+
+def grading_tone(verdict: str) -> str | None:
+    from . import grading
+    return grading.TONES.get(verdict)
 
 
 EMPTY_POOL = {
@@ -601,6 +644,21 @@ class Handler(BaseHTTPRequestHandler):
                                  data.get("castling") or "-")
             t.new_drill(fen, name=data.get("name") or "Hand-set position",
                         source={"kind": "custom"})
+            return self.json(t.state())
+
+        if path == "/api/games":
+            rows = conn.execute(
+                "SELECT g.id, g.white, g.black, g.white_elo, g.black_elo, g.result,"
+                " g.my_colour, g.played_at, g.time_class, r.accuracy,"
+                " (SELECT name FROM positions p WHERE p.source_game=g.id"
+                "  AND p.phase='opening' LIMIT 1) opening"
+                " FROM games g LEFT JOIN reviews r ON r.game_id=g.id"
+                " WHERE g.my_colour IS NOT NULL"
+                " ORDER BY g.played_at DESC, g.id DESC LIMIT 200").fetchall()
+            return self.json({"games": [dict(r) for r in rows]})
+
+        if path == "/api/game/open":
+            t.open_game(int(data.get("id")))
             return self.json(t.state())
 
         if path == "/api/game/load":

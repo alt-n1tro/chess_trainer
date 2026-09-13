@@ -46,6 +46,11 @@ ever installed with sudo; if a step would need root, the app stops and says so.
 | `./run test` | Run the test suite. |
 | `./run whoami <name>` | Record which chess.com name is you, and re-tag stored games. |
 
+Reviewing a game also adds its positions to the drill pools, so after
+`./run review` there is nothing else to run. `./run phases --build` is for
+games that are imported but not reviewed; it is incremental, and
+`--rebuild` starts the pools over.
+
 `--player` walks every monthly archive oldest first and skips games already
 stored, so re-running it later picks up only what is new. It sets your username
 the first time, so `whoami` is only needed to change it.
@@ -85,6 +90,11 @@ defensive move, promotion, king attack, quiet move. From that:
 - openings by family and colour: score, accuracy, and your winning chances at
   move 12, which is where an opening leaves you
 - accuracy over your recent games
+
+Your reviewed games are in the menu (`O`) under *Your games*, with their
+accuracy. Opening one shows the move list with a coloured verdict on every
+move; click a move to see it, and *Drill this moment* puts you back into any
+mistake of yours with the opponent to move.
 
 **Gym** reads your answers in the trainer: best-move rate by phase, by move of
 a chain (does it hold up once you have to follow a plan?), by drill-from-here

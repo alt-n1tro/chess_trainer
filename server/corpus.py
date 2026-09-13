@@ -418,23 +418,106 @@ def opening_node(game: chess.pgn.Game, colour: str):
     return None, None
 
 
-def build_phases(conn, pool, progress=None, yes: bool = False,
-                 log=print) -> dict:
-    """Rebuild the middlegame and endgame pools.
+# The eval window, as win probability from your side. -200cp and +250cp on
+# the same logistic the grader uses.
+WP_LOW, WP_HIGH = 33.7, 70.5
 
-    Balance is verified twice: material within one pawn, then Stockfish at
-    depth 12, then depth 20 for survivors. Material alone calls positions
-    equal that are not, routinely.
+
+def pool_from_review(conn, game_id: int) -> dict:
+    """Add a reviewed game's positions to the pools, with no engine work:
+    the review already evaluated every position. Same rules as the engine
+    path -- opponent to move, material within a pawn, eval inside the
+    window, no mate on the board, at most three per game spread across it.
     """
-    games = conn.execute(
-        "SELECT * FROM games WHERE my_colour IS NOT NULL ORDER BY id"
-    ).fetchall()
-    conn.execute("DELETE FROM positions")
+    game = conn.execute("SELECT * FROM games WHERE id=?", (game_id,)).fetchone()
+    if game is None or game["my_colour"] not in ("white", "black"):
+        return {}
+    conn.execute("DELETE FROM positions WHERE source_game=? AND phase != 'opening'",
+                 (game_id,))
+    me = chess.WHITE if game["my_colour"] == "white" else chess.BLACK
+    pgn = chess.pgn.read_game(io.StringIO(game["pgn"]))
+    family = opening_family(dict(pgn.headers)) if pgn else "Unnamed opening"
+    if pgn:
+        node, board = opening_node(pgn, game["my_colour"])
+        if node is not None:
+            _insert(conn, board, "opening", game_id, node.ply(), None,
+                    tail_san(node), game["my_colour"], family)
+    rows = conn.execute(
+        "SELECT ply, fen, wp_before, mate_in, phase FROM review_moves"
+        " WHERE game_id=? AND is_me=0 ORDER BY ply", (game_id,)).fetchall()
+    survivors = []
+    for r in rows:
+        board = chess.Board(r["fen"])
+        if board.turn == me or r["phase"] == "opening":
+            continue
+        if r["mate_in"] is not None or board.is_game_over(claim_draw=True):
+            continue
+        # No material gate here: the engine's evaluation is the balance
+        # check, and a pawn up with compensation is exactly what needs
+        # practising.
+        my_wp = 100.0 - (r["wp_before"] or 50.0)
+        if not WP_LOW <= my_wp <= WP_HIGH:
+            continue
+        survivors.append((r, board))
+    counts = {"middlegame": 0, "endgame": 0}
+    for r, board in _spread(survivors, MAX_PER_GAME):
+        cp = int(round(_cp_from_wp(100.0 - (r["wp_before"] or 50.0))))
+        _insert(conn, board, r["phase"], game_id, r["ply"], cp,
+                _tail_from_pgn(pgn, r["ply"]), game["my_colour"], family)
+        counts[r["phase"]] += 1
     conn.commit()
+    return counts
+
+
+def _cp_from_wp(wp: float) -> float:
+    """Inverse of the grader's logistic."""
+    import math
+    x = max(0.001, min(0.999, wp / 100.0))
+    return -math.log(1.0 / x - 1.0) / 0.00368208
+
+
+def _tail_from_pgn(game, ply: int, count: int = 4) -> str:
+    if game is None:
+        return ""
+    node = game
+    for _ in range(ply - 1):
+        if not node.variations:
+            break
+        node = node.variations[0]
+    return tail_san(node, count)
+
+
+def build_phases(conn, pool, progress=None, yes: bool = False,
+                 log=print, rebuild: bool = False) -> dict:
+    """Build the middlegame and endgame pools.
+
+    Reviewed games are pooled from their review, with no engine work. The
+    rest get the engine path: material within one pawn, then Stockfish at
+    depth 12, then depth 20 for survivors. Incremental by default -- games
+    already pooled are left alone -- and `rebuild` starts over.
+    """
+    if rebuild:
+        conn.execute("DELETE FROM positions")
+        conn.commit()
+    games = conn.execute(
+        "SELECT g.* FROM games g WHERE g.my_colour IS NOT NULL"
+        " AND NOT EXISTS (SELECT 1 FROM positions p WHERE p.source_game=g.id)"
+        " ORDER BY g.id"
+    ).fetchall()
     counts = {"opening": 0, "middlegame": 0, "endgame": 0,
               "examined": 0, "games": len(games)}
 
     for gi, row in enumerate(games):
+        reviewed = conn.execute("SELECT 1 FROM reviews WHERE game_id=?",
+                                (row["id"],)).fetchone()
+        if reviewed:
+            got = pool_from_review(conn, row["id"])
+            counts["opening"] += 1
+            counts["middlegame"] += got.get("middlegame", 0)
+            counts["endgame"] += got.get("endgame", 0)
+            if progress:
+                progress(gi, len(games), counts["examined"])
+            continue
         game = chess.pgn.read_game(io.StringIO(row["pgn"]))
         if game is None:
             continue

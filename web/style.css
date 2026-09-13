@@ -418,3 +418,10 @@ kbd {
   #stats { inset: 8px; }
   .bar { grid-template-columns: 110px 1fr 90px; }
 }
+
+.movelist .mv .v { display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+  margin-left: 3px; vertical-align: middle; }
+.movelist .v.best { background: var(--best); } .movelist .v.good { background: var(--good); }
+.movelist .v.inaccuracy { background: var(--inaccuracy); }
+.movelist .v.mistake { background: var(--mistake); }
+.movelist .v.blunder { background: var(--blunder); } .movelist .v.shown { background: var(--shown); }

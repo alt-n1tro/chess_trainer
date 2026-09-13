@@ -157,6 +157,11 @@ def review_game(conn, pool, row, depth: int = REVIEW_DEPTH, progress=None,
              before.get("depth") or depth),
         )
     accuracy = game_accuracy(my_acc, my_wps)
+    conn.commit()
+    # The review has evaluated every position, so the drill pools can grow
+    # from it without another search.
+    from . import corpus
+    corpus.pool_from_review(conn, row["id"])
     conn.execute(
         "INSERT OR REPLACE INTO reviews(game_id, depth, engine_ver, reviewed_at,"
         " accuracy, plies) VALUES(?,?,?,?,?,?)",

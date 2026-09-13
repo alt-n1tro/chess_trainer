@@ -256,6 +256,64 @@ class Accuracy(unittest.TestCase):
         self.assertEqual(review.move_accuracy(500), 0.0)
 
 
+class Pools(unittest.TestCase):
+    """The drill pools grow from reviewed games without engine work."""
+
+    def _db(self):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(open(db.SCHEMA_PATH).read())
+        return conn
+
+    def test_a_reviewed_game_feeds_the_pools(self):
+        conn = self._db()
+        pgn = ("[White \"me\"]\n[Black \"them\"]\n[Result \"1-0\"]\n\n"
+               "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 6. Re1 b5 "
+               "7. Bb3 d6 8. c3 O-O 9. h3 Nb8 10. d4 Nbd7 11. Nbd2 Bb7 12. Bc2 Re8 *")
+        conn.execute("INSERT INTO games(id, pgn, my_colour, white, black, result)"
+                     " VALUES(1, ?, 'white', 'me', 'them', '1-0')", (pgn,))
+        conn.execute("INSERT INTO reviews(game_id, depth, engine_ver, reviewed_at, plies)"
+                     " VALUES(1, 16, 'test', 0, 24)")
+        board = chess.Board()
+        game = chess.pgn.read_game(__import__("io").StringIO(pgn))
+        node = game
+        ply = 0
+        while node.variations:
+            node = node.variations[0]
+            ply += 1
+            fen = board.fen()
+            is_me = 1 if board.turn == chess.WHITE else 0
+            # a level game: 50% for whoever is to move
+            conn.execute(
+                "INSERT INTO review_moves(game_id, ply, is_me, fen, move, wp_before,"
+                " verdict, phase, themes) VALUES(1,?,?,?,?,50.0,'best',?,'[]')",
+                (ply, is_me, fen, node.move.uci(), db.classify_phase(board)))
+            board.push(node.move)
+        conn.commit()
+        counts = corpus.pool_from_review(conn, 1)
+        self.assertGreaterEqual(counts["middlegame"], 1)
+        rows = conn.execute("SELECT phase, my_colour FROM positions").fetchall()
+        self.assertTrue(any(r["phase"] == "opening" for r in rows))
+        for r in rows:
+            self.assertEqual(r["my_colour"], "white")
+        # every pooled position has the opponent to move
+        for r in conn.execute("SELECT fen FROM positions WHERE phase != 'opening'"):
+            self.assertEqual(chess.Board(r["fen"]).turn, chess.BLACK)
+
+    def test_a_lost_game_pools_nothing(self):
+        conn = self._db()
+        conn.execute("INSERT INTO games(id, pgn, my_colour) VALUES(1, '1. e4 *', 'white')")
+        conn.execute("INSERT INTO reviews(game_id, depth, engine_ver, reviewed_at, plies)"
+                     " VALUES(1, 16, 'test', 0, 1)")
+        conn.execute(
+            "INSERT INTO review_moves(game_id, ply, is_me, fen, move, wp_before, verdict,"
+            " phase, themes) VALUES(1, 22, 0, ?, 'a7a6', 95.0, 'best', 'middlegame', '[]')",
+            ("r1bq1rk1/pp2bppp/2n1pn2/3p4/2PP4/2N2NP1/PP2PPBP/R2Q1RK1 b - - 0 11",))
+        conn.commit()
+        self.assertEqual(corpus.pool_from_review(conn, 1)["middlegame"], 0)
+
+
 class Statistics(unittest.TestCase):
     """Both views must work on an empty database and on a full one."""
 

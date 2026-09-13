@@ -232,9 +232,19 @@ def cmd_phases(args) -> int:
               " you are.", file=sys.stderr)
         return 1
     existing = conn.execute("SELECT COUNT(*) n FROM positions").fetchone()["n"]
+    new = conn.execute(
+        "SELECT COUNT(*) n FROM games g WHERE g.my_colour IS NOT NULL AND NOT EXISTS"
+        " (SELECT 1 FROM positions p WHERE p.source_game=g.id)").fetchone()["n"]
+    if not args.rebuild and not new:
+        print(f"All {games} game(s) are pooled already ({existing} positions)."
+              " --rebuild starts over.")
+        return 0
     if not confirm(
-        f"Rebuild the pools from {games} game(s).\n"
-        f"  - deletes and replaces the current {existing} pooled position(s)\n"
+        (f"Rebuild the pools from {games} game(s).\n"
+         f"  - deletes and replaces the current {existing} pooled position(s)\n")
+        if args.rebuild else
+        (f"Add {new} new game(s) to the pools ({existing} positions already).\n"
+         f"  - reviewed games are pooled from their review, no engine time\n"),
         f"  - analyses each candidate at depth {engine.DEPTH_FILTER}, survivors"
         f" at depth {engine.DEPTH_GRADE}\n"
         f"  - cached analysis is kept and reused; rough estimate"
@@ -255,7 +265,8 @@ def cmd_phases(args) -> int:
             bar.stage = f"analysing game {gi + 1}/{total}, {examined} positions seen"
             bar.draw()
 
-        counts = corpus.build_phases(conn, pool, progress=progress, log=print)
+        counts = corpus.build_phases(conn, pool, progress=progress, log=print,
+                                     rebuild=args.rebuild)
     finally:
         bar.done()
         pool.close()
@@ -496,6 +507,8 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("phases")
     p.add_argument("--build", action="store_true")
+    p.add_argument("--rebuild", action="store_true",
+                   help="with --build: start the pools over")
     p.add_argument("--yes", action="store_true")
     p.set_defaults(func=cmd_phases)
 
