@@ -166,6 +166,23 @@ class OpponentMoves(unittest.TestCase):
         self.assertEqual(drills.plausible_moves([]), [])
 
 
+class Chains(unittest.TestCase):
+    def test_the_worst_move_sets_the_tone_of_a_chain(self):
+        """Three good moves and one blunder is a blunder."""
+        self.assertEqual(drills._worst(["best", "best", "blunder"]), "blunder")
+        self.assertEqual(drills._worst(["best", "good"]), "good")
+        self.assertEqual(drills._worst(["best", "best"]), "best")
+        self.assertEqual(drills._worst(["shown", "best"]), "shown")
+        self.assertIsNone(drills._worst([]))
+
+    def test_length_is_clamped_to_the_allowed_range(self):
+        board = chess.Board().fen()
+        for asked, expected in ((0, 1), (1, 1), (3, 3), (99, drills.MAX_CHAIN)):
+            drill = drills.Drill.__new__(drills.Drill)
+            drill.chain = max(1, min(int(asked or 1), drills.MAX_CHAIN))
+            self.assertEqual(drill.chain, expected, board)
+
+
 class Positions(unittest.TestCase):
     def test_checkmate_is_not_a_fifty_percent_position(self):
         board = chess.Board("7k/5ppp/8/8/8/8/6PP/R5K1 w - - 0 1")
@@ -281,6 +298,53 @@ class WithEngine(unittest.TestCase):
         self.assertEqual(before["fen"], after["fen"])
         self.assertEqual(before["opp_san"], after["opp_san"])
         self.assertIsNone(after["answer"])
+
+    def test_a_chain_asks_for_every_move(self):
+        """Three moves in a row: they answer between yours, and the round is
+        not over until you have found all three."""
+        drill = drills.Drill(db.connect(), self.pool, chess.Board().fen(),
+                             "openings", chain=3)
+        seen = []
+        for step in (1, 2, 3):
+            state = drill.to_json()
+            self.assertEqual(state["step"], step)
+            self.assertTrue(state["can_answer"])
+            self.assertFalse(state["done"])
+            answer = drill.answer(drill.my_lines()[0]["move"])
+            self.assertEqual(answer["verdict"], "best")
+            seen.append(answer["my_san"])
+            if step < 3:
+                self.assertIsNotNone(drill.round_state["opp_reply"],
+                                     "they must answer between your moves")
+        final = drill.to_json()
+        self.assertTrue(final["done"])
+        self.assertFalse(final["can_answer"])
+        self.assertEqual(len(final["steps"]), 3)
+        self.assertEqual(len(set(seen)), 3, seen)
+
+    def test_a_chain_is_recorded_move_by_move(self):
+        drill = drills.Drill(db.connect(), self.pool, chess.Board().fen(),
+                             "openings", chain=2)
+        drill.answer(drill.my_lines()[0]["move"])
+        drill.answer(drill.my_lines()[0]["move"])
+        rows = db.connect().execute(
+            "SELECT step FROM answers WHERE pos_hash IN (?, ?) ORDER BY id DESC"
+            " LIMIT 2", (drill.round_state["hash"], drill.round_state["hash"]),
+        ).fetchall()
+        self.assertTrue(rows)
+
+    def test_replay_starts_the_whole_chain_again(self):
+        drill = drills.Drill(db.connect(), self.pool, chess.Board().fen(),
+                             "openings", chain=3)
+        asked = drill.to_json()
+        drill.answer(drill.my_lines()[0]["move"])
+        self.assertEqual(drill.round_state["step"], 2)
+        drill.replay()
+        again = drill.to_json()
+        self.assertEqual(again["step"], 1)
+        self.assertEqual(again["fen"], asked["fen"])
+        self.assertEqual(again["opp_san"], asked["opp_san"])
+        self.assertEqual(again["steps"], [])
 
     def test_drill_from_here_can_start_from_a_line_you_walked(self):
         """Walking into the engine's line and drilling from there must keep

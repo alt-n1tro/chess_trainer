@@ -21,6 +21,7 @@ const el = {
   actions: $("actions"), tree: $("tree"), treeBox: $("tree-box"),
   menu: $("menu"), help: $("help"), editor: $("editor"), toast: $("toast"),
   modeBtn: $("btn-mode"), modeList: $("mode-list"), pick: $("pick"),
+  chainBtn: $("btn-chain"), chainList: $("chain-list"),
 };
 
 const MODE_LABEL = { openings: "Openings", middlegame: "Middlegame", endgame: "Endgame" };
@@ -98,6 +99,15 @@ async function apply(data) {
   pvCursor = null;
   document.body.dataset.mode = data.mode;
   el.modeBtn.textContent = `${MODE_LABEL[data.mode]} ▾`;
+  el.chainBtn.textContent = data.chain === 1
+    ? "1 move \u25be" : `${data.chain} moves \u25be`;
+  el.chainList.innerHTML = Array.from({ length: data.max_chain || 5 }, (_, i) => {
+    const n = i + 1;
+    const note = n === 1 ? "find the move"
+      : `find the move, then the next ${n - 1}`;
+    return `<li data-set-chain="${n}" class="${n === data.chain ? "on" : ""}">` +
+      `<span>${n} move${n === 1 ? "" : "s"}</span><span class="n">${note}</span></li>`;
+  }).join("");
   el.modeList.innerHTML = (data.modes || []).map((m) =>
     `<li data-set-mode="${m.mode}" class="${m.active ? "on" : ""}">` +
     `<span>${MODE_LABEL[m.mode]}</span>` +
@@ -127,8 +137,9 @@ async function renderDrill(d) {
 
   const a = d.answer;
   selected = null;
-  const key = `${d.node_id_current}|${d.opp_move}|${d.round}|${d.depth_level}`;
-  const target = a ? a.fen_after : d.fen;
+  const key = `${d.node_id_current}|${d.opp_move}|${d.round}` +
+              `|${d.depth_level}|${d.step || 1}`;
+  const target = d.done && a ? a.fen_after : d.fen;
 
   board.disableMoveInput();
   await orient(d.my_colour === "black" ? COLOR.black : COLOR.white);
@@ -138,6 +149,12 @@ async function renderDrill(d) {
     markers([[d.opp_move.slice(0, 2), MARKER_MOVE]], true);
     await pause(180);
     await setBoard(d.fen, true);
+  } else if (a && !d.done && d.opp_reply && key !== shownKey) {
+    // Mid-chain: your move lands, then their reply, then it is your turn.
+    await setBoard(a.fen_after, shownFen !== a.fen_after);
+    markers(markersFor(d, true), true);
+    await pause(340);
+    await setBoard(d.fen, true);
   } else {
     await setBoard(target, shownFen !== null && shownFen !== target);
   }
@@ -145,7 +162,7 @@ async function renderDrill(d) {
 
   markers(markersFor(d), true);
   board.removeArrows();
-  if (a && a.verdict !== "best" && a.best_move) {
+  if (a && d.done && a.verdict !== "best" && a.best_move) {
     board.addArrow(ARROW_BEST, a.best_move.slice(0, 2), a.best_move.slice(2, 4));
     markers([[a.best_move.slice(0, 2), MARKER_BEST],
              [a.best_move.slice(2, 4), MARKER_BEST]], false);
@@ -156,8 +173,11 @@ async function renderDrill(d) {
     board.enableMoveInput(inputHandler, d.my_colour === "black" ? COLOR.black : COLOR.white);
   }
 
+  const reply = d.opp_reply && !d.done ? d.opp_reply.san : null;
+  const more = d.chain > 1 ? ` Move ${d.step} of ${d.chain}.` : "";
   el.status.textContent = d.can_answer
-    ? `They played ${d.opp_san}. Your move.`
+    ? (reply ? `They answered ${reply}. Your move.${more}`
+             : `They played ${d.opp_san}. Your move.${more}`)
     : (a ? `You played ${a.my_san || "—"}.` : `They played ${d.opp_san}.`);
 
   renderContext(d);
@@ -185,12 +205,14 @@ function markers(list, clear) {
   list.forEach(([square, type]) => board.addMarker(type, square));
 }
 
-function markersFor(d) {
+function markersFor(d, midMove) {
   const out = [];
   const a = d.answer;
-  if (d.opp_move) {
-    out.push([d.opp_move.slice(0, 2), MARKER_MOVE]);
-    out.push([d.opp_move.slice(2, 4), MARKER_MOVE]);
+  const last = !midMove && a && !d.done && d.opp_reply
+    ? d.opp_reply.uci : d.opp_move;
+  if (last) {
+    out.push([last.slice(0, 2), MARKER_MOVE]);
+    out.push([last.slice(2, 4), MARKER_MOVE]);
   }
   if (a && a.my_move) {
     const tone = a.verdict === "best" ? MARKER_BEST : MARKER_PLAYED;
@@ -234,17 +256,30 @@ function renderProgress(d) {
     const now = i + 1 === d.round && !d.answer ? " now" : "";
     dots.push(`<span class="dot ${tone}${now}"></span>`);
   }
-  el.progress.innerHTML =
-    `<span>Position ${d.round} of ${d.rounds}</span>` +
+  let html = `<span>Position ${d.round} of ${d.rounds}</span>` +
     `<span class="dots">${dots.join("")}</span>`;
+  if (d.chain > 1) {
+    const steps = [];
+    for (let i = 0; i < d.chain; i += 1) {
+      const tone = (d.steps || [])[i] || "";
+      const now = !tone && i + 1 === d.step && !d.done ? " now" : "";
+      steps.push(`<span class="step ${tone}${now}"></span>`);
+    }
+    html += `<span class="sep">\u00b7</span><span class="chain">` +
+      `<span>move ${Math.min(d.step, d.chain)} of ${d.chain}</span>` +
+      `<span class="steps">${steps.join("")}</span></span>`;
+  }
+  el.progress.innerHTML = html;
 }
 
 function renderVerdict(d) {
   const a = d.answer;
   if (!a) {
+    const what = d.chain > 1
+      ? `Find the best ${d.chain} moves in a row for ${d.my_colour}.`
+      : `Find the best reply for ${d.my_colour}.`;
     el.verdict.innerHTML =
-      `<div class="ask">They played <b>${esc(d.opp_san)}</b>. ` +
-      `Find the best reply for ${d.my_colour}.</div>`;
+      `<div class="ask">They played <b>${esc(d.opp_san)}</b>. ${what}</div>`;
     return;
   }
   const ex = a.explanation || {};
@@ -264,8 +299,11 @@ function renderVerdict(d) {
         `</div>`
       : "") +
     (ex.text ? `<div class="explain">${esc(ex.text)}</div>` : "") +
-    `<div class="lines">${pvRow("Yours", ex.my_pv, "mine")}` +
-    `${pvRow("Best", ex.best_pv, "best")}</div></div>`;
+    (d.done ? `<div class="lines">${pvRow("Yours", ex.my_pv, "mine")}` +
+              `${pvRow("Best", ex.best_pv, "best")}</div>` : "") +
+    `</div>` +
+    (d.done ? "" : `<div class="ask">Keep going: find move ${d.step} of ` +
+      `${d.chain}.</div>`);
 }
 
 function pvRow(label, pv, kind) {
@@ -280,8 +318,9 @@ function pvRow(label, pv, kind) {
 function renderActions(d) {
   const a = d.answer;
   const rows = [];
-  if (!a) {
-    rows.push(rowOf([btnHtml("show", "Show me the move", false, "primary")]));
+  if (!d.done) {
+    rows.push(rowOf([btnHtml("show", "Show me the move", false,
+                             a ? "" : "primary")]));
   } else {
     const next = d.has_next_round
       ? "Next position" : `Drill another ${MODE_NOUN[d.mode]}`;
@@ -474,14 +513,17 @@ async function openHelp() {
     `<h2>Chess Trainer</h2>` +
     `<div class="sec">How it works</div>` +
     `<div class="meta">A position is set with the opponent to move. The engine` +
-    ` plays one of its five best moves, in a random order that uses all five` +
-    ` before repeating. You find the best reply. Right-click the board to draw` +
-    ` arrows and circles, as on chess.com.</div>` +
+    ` plays one of the moves a real opponent might, in a random order that` +
+    ` uses them all before repeating, and you find the best reply. Ask for` +
+    ` more than one move and the opponent answers back, so you have to find a` +
+    ` plan and not just a move. Right-click the board to draw arrows and` +
+    ` circles, as on chess.com.</div>` +
     `<div class="sec">Keys</div><table class="stats">` + [
       ["Enter", "Next position"], ["O / B", "Menu"], ["M", "Cycle mode"],
       ["E", "Set up a position"], ["S", "Save position"], ["Backspace", "Back"],
       ["R", "Replay this position"], ["D", "Drill from here"],
-      ["Space", "Show me the move"], ["? / H", "Help"], ["Esc", "Close"],
+      ["Space", "Show me the move"], ["1 \u2013 5", "Moves per position"],
+      ["? / H", "Help"], ["Esc", "Close"],
       ["← →", "In a game: step a move"],
       ["Home / End", "In a game: jump to start / end"],
     ].map(([k, v]) => `<tr><th><kbd>${k}</kbd></th><td>${v}</td></tr>`).join("") +
@@ -604,6 +646,7 @@ function show(node, html) {
 function closeOverlays() {
   [el.menu, el.help].forEach((n) => { n.hidden = true; });
   el.modeList.hidden = true;
+  el.chainList.hidden = true;
 }
 
 function anyOverlayOpen() { return !el.menu.hidden || !el.help.hidden; }
@@ -689,11 +732,17 @@ function play(from, to, promotion) {
 }
 
 document.addEventListener("click", async (event) => {
-  const hit = event.target.closest("[data-act], [data-node], [data-ply], [data-set-mode]");
+  const hit = event.target.closest(
+    "[data-act], [data-node], [data-ply], [data-set-mode], [data-set-chain]");
   if (!hit) {
     if (anyOverlayOpen() && !event.target.closest(".overlay") &&
         !event.target.closest("#top")) closeOverlays();
     return;
+  }
+  if (hit.dataset.setChain) {
+    closeOverlays();
+    shownKey = null;
+    return void call("/api/chain", { moves: Number(hit.dataset.setChain) });
   }
   if (hit.dataset.setMode) {
     closeOverlays();
@@ -789,7 +838,13 @@ $("btn-game").addEventListener("click", async () => {
 });
 el.modeBtn.addEventListener("click", (event) => {
   event.stopPropagation();
+  el.chainList.hidden = true;
   el.modeList.hidden = !el.modeList.hidden;
+});
+el.chainBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
+  el.modeList.hidden = true;
+  el.chainList.hidden = !el.chainList.hidden;
 });
 
 document.addEventListener("keydown", (event) => {
@@ -814,6 +869,9 @@ document.addEventListener("keydown", (event) => {
     case " ": if (d && d.can_answer) { event.preventDefault(); return void call("/api/show", {}); }
       return;
     case "o": case "b": event.preventDefault(); return openMenu();
+    case "1": case "2": case "3": case "4": case "5":
+      event.preventDefault();
+      return void call("/api/chain", { moves: Number(key) });
     case "m": {
       event.preventDefault();
       const order = ["openings", "middlegame", "endgame"];

@@ -27,8 +27,9 @@ CREATE TABLE IF NOT EXISTS answers (
   opp_move      TEXT    NOT NULL,   -- UCI
   my_move       TEXT,               -- UCI; NULL when shown
   delta_wp      REAL,               -- win-probability loss vs best, in points
-  verdict       TEXT    NOT NULL,   -- best | playable | wrong | shown
-  answered_at   INTEGER NOT NULL
+  verdict       TEXT    NOT NULL,   -- best | second | ... | blunder | shown
+  answered_at   INTEGER NOT NULL,
+  step          INTEGER NOT NULL DEFAULT 1   -- which move of the chain
 );
 CREATE INDEX IF NOT EXISTS answers_pos ON answers(pos_hash);
 CREATE INDEX IF NOT EXISTS answers_root ON answers(root_hash, depth_level);

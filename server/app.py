@@ -37,6 +37,11 @@ class Trainer:
         self.mode = db.meta_get(self.conn, "mode", "openings")
         if self.mode not in drills.MODES:
             self.mode = "openings"
+        try:
+            self.chain = max(1, min(int(db.meta_get(self.conn, "chain", 1)),
+                                    drills.MAX_CHAIN))
+        except (TypeError, ValueError):
+            self.chain = 1
         self.stack: list[Drill] = []
         self.game = None            # game-walk state, when one is loaded
 
@@ -54,11 +59,22 @@ class Trainer:
         self.mode = mode
         db.meta_set(self.conn_t(), "mode", mode)
 
+    def set_chain(self, moves) -> None:
+        """How many moves in a row a position asks for."""
+        try:
+            moves = int(moves)
+        except (TypeError, ValueError):
+            raise ValueError("that is not a number of moves")
+        if not 1 <= moves <= drills.MAX_CHAIN:
+            raise ValueError(f"between 1 and {drills.MAX_CHAIN} moves")
+        self.chain = moves
+        db.meta_set(self.conn_t(), "chain", moves)
+
     # -- starting drills
     def new_drill(self, fen: str, *, name=None, source=None,
                   mode=None) -> Drill:
         drill = Drill(self.conn_t(), self.pool, fen, mode or self.mode,
-                      name=name, source=source)
+                      name=name, source=source, chain=self.chain)
         self.stack = [drill]
         self.game = None
         return drill
@@ -115,7 +131,7 @@ class Trainer:
             raise ValueError(f"Depth is capped at {drills.MAX_DEPTH_LEVEL} levels.")
         drill = Drill(self.conn_t(), self.pool, answer["fen_after"], cur.mode,
                       name=cur.name, source=cur.source,
-                      depth_level=cur.depth_level + 1,
+                      depth_level=cur.depth_level + 1, chain=self.chain,
                       root_hash=cur.root_hash, node_id=answer.get("my_node"))
         self.stack.append(drill)
         return drill
@@ -125,7 +141,7 @@ class Trainer:
         starting at the move that produced what you were looking at."""
         drill = Drill(self.conn_t(), self.pool, fen, cur.mode, name=cur.name,
                       source=dict(cur.source or {}, kind="line"),
-                      first_move=first_move)
+                      first_move=first_move, chain=self.chain)
         self.stack = [drill]
         return drill
 
@@ -157,7 +173,8 @@ class Trainer:
         if board.turn == (cur.opponent if cur else board.turn):
             drill = Drill(conn, self.pool, row["fen"], self.mode, name=name,
                           source=base, depth_level=row["depth_level"],
-                          root_hash=row["root_hash"], node_id=row["id"])
+                          root_hash=row["root_hash"], node_id=row["id"],
+                          chain=self.chain)
             self.stack = (self.stack[:1] if self.stack else []) + [drill]
             return drill
         # You are to move here: re-enter the parent ask-root on this candidate.
@@ -167,7 +184,8 @@ class Trainer:
             raise LookupError("that row has no question above it")
         drill = Drill(conn, self.pool, parent["fen"], self.mode, name=name,
                       source=base, depth_level=parent["depth_level"],
-                      root_hash=parent["root_hash"], node_id=parent["id"])
+                      root_hash=parent["root_hash"], node_id=parent["id"],
+                      chain=self.chain)
         for i, cand in enumerate(drill.candidates):
             if cand["uci"] == row["move_uci"]:
                 drill.select_candidate(i)
@@ -180,6 +198,7 @@ class Trainer:
         # "kind" marks a full state payload. Several endpoints also return a
         # "mode" field, and the client must not mistake those for one.
         out = {"kind": "state", "mode": self.mode, "modes": self.mode_summary(),
+               "chain": self.chain, "max_chain": drills.MAX_CHAIN,
                "stack_depth": len(self.stack), "game": self.game_state()}
         drill = self.drill
         if drill is not None:
@@ -450,6 +469,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/mode":
             t.set_mode(data.get("mode", ""))
             return self.json(self._with_drill(t))
+
+        if path == "/api/chain":
+            t.set_chain(data.get("moves"))
+            drill = t.drill
+            if drill is not None and drill.chain != t.chain:
+                # Take effect now rather than at the next position.
+                drill.chain = t.chain
+                drill.start_round(drill.index)
+            return self.json(t.state())
 
         if path == "/api/random":
             return self.json(self._with_drill(t, data.get("name"),

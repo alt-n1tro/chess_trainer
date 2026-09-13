@@ -55,10 +55,27 @@ prompts.
 
 ## Keys
 
-`Enter` next · `O`/`B` menu · `M` cycle mode · `E` set up a position ·
+`Enter` next · `1`–`5` moves per position · `O`/`B` menu · `M` cycle mode · `E` set up a position ·
 `S` save · `Backspace` back · `R` reset and replay this position · `?`/`H` help ·
 `Esc` close · `←` `→` step a move in a game · `Home`/`End` jump · `1`–`5` pick
 the nth opponent option.
+
+## One move, or a plan
+
+The chip in the top bar sets how many moves in a row a position asks for, from
+one to five. Keys `1`–`5` do the same.
+
+At one, a position is a puzzle: find the move. Above one, the opponent answers
+back and you must find the next move too, and the one after that — which is a
+different skill, because a move that looks strong and leads nowhere stops
+scoring well once you have to follow it up.
+
+Between your moves the opponent plays the engine's own continuation, so you are
+answering best defence rather than a convenient reply. Each move is graded on
+its own, the panel shows a bar per move as you go, and the position's mark is
+its worst move: three good moves and a blunder is a blunder. Playing a bad move
+does not end the chain — you carry on from the position you made, which is the
+point.
 
 ## What the opponent plays
 

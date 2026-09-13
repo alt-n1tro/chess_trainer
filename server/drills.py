@@ -17,6 +17,7 @@ from . import db, explain as explain_mod, grading
 from .engine import DEPTH_CANDIDATES, DEPTH_GRADE, MULTIPV_CANDIDATES
 
 SESSION_ID = "local"          # one local user, one persistent session
+MAX_CHAIN = 5                 # how many moves in a row a position can ask for
 MAX_DEPTH_LEVEL = 6           # Drill from here is capped at 6 levels
 ROUNDS = MULTIPV_CANDIDATES
 RECENCY_COLD = 10             # the last 10 positions drawn: weight 0
@@ -204,6 +205,18 @@ def groups(conn, mode: str) -> list[dict]:
 
 # --- the drill -------------------------------------------------------------
 
+# Worst first: a chain is only as good as its weakest move.
+TONE_ORDER = ["blunder", "shown", "mistake", "inaccuracy", "good", "best"]
+
+
+def _worst(tones: list[str]) -> str | None:
+    """The tone a whole chain of answers deserves."""
+    present = [t for t in tones if t in TONE_ORDER]
+    if not present:
+        return None
+    return min(present, key=TONE_ORDER.index)
+
+
 def plausible_moves(candidates: list[dict],
                     max_loss: float = OPPONENT_MAX_LOSS_WP,
                     max_cp: float = OPPONENT_MAX_LOSS_CP) -> list[dict]:
@@ -236,7 +249,8 @@ class Drill:
 
     def __init__(self, conn, pool, fen: str, mode: str, *, name=None,
                  source=None, depth_level: int = 0, root_hash=None,
-                 node_id=None, parent_node=None, first_move: str | None = None):
+                 node_id=None, parent_node=None, first_move: str | None = None,
+                 chain: int = 1):
         # No connection is held: sqlite3 objects belong to the thread that
         # created them, and requests arrive on whichever thread is free.
         self.pool = pool
@@ -246,6 +260,9 @@ class Drill:
         self.name = name
         self.source = source or {}
         self.depth_level = depth_level
+        # How many moves in a row this position asks for. One move tests
+        # whether you can see; three test whether you had a plan.
+        self.chain = max(1, min(int(chain or 1), MAX_CHAIN))
         self.phase = db.classify_phase(self.board)
         self.hash = db.pos_hash(self.board, self.phase)
         self.root_hash = root_hash if root_hash is not None else self.hash
@@ -351,6 +368,10 @@ class Drill:
             "hash": db.pos_hash(board, phase),
             "node_id": opp_node,
             "answer": None,
+            "step": 1,
+            "steps": [],            # a verdict per move you have played here
+            "done": False,
+            "opp_reply": None,      # what they played to reach this step
         }
         self._warm()
 
@@ -363,12 +384,9 @@ class Drill:
         """Put the question back exactly as it was asked: the same position,
         the same opponent move, your answer cleared. It never draws a
         different move and never fetches a fresh position."""
-        rs = self.round_state
-        if rs is None:
+        if self.round_state is None:
             return self.restart()
-        rs["answer"] = None
-        self.results[self.index] = None
-        self._warm()
+        self.start_round(self.index)
 
     def restart(self) -> None:
         """Start this position again from round one, reshuffling which of the
@@ -398,7 +416,35 @@ class Drill:
                     continue
                 jobs.append((b2.fen(), DEPTH_GRADE, 1))
                 jobs.append((b2.fen(), DEPTH_CANDIDATES, MULTIPV_CANDIDATES))
-        jobs.extend(self._queue_jobs())          # 3. and 4.
+        if self.chain > 1:                       # 3. where a chain will go
+            for cand in self.candidates[:2]:
+                probe = self.board.copy(stack=False)
+                try:
+                    probe.push(chess.Move.from_uci(cand["uci"]))
+                except (ValueError, AssertionError):
+                    continue
+                for uci in (cand.get("pv") or [])[1:self.chain * 2]:
+                    try:
+                        probe.push(chess.Move.from_uci(uci))
+                    except (ValueError, AssertionError):
+                        break
+                    if probe.turn != self.my_colour:
+                        continue
+                    jobs.append((probe.fen(), DEPTH_GRADE, MULTIPV_CANDIDATES))
+        jobs.extend(self._queue_jobs())          # 4. and 5.
+        self.pool.warm(jobs)
+
+    def _warm_chain(self, board: chess.Board) -> None:
+        """The next question of a chain, plus what grading it will need."""
+        jobs = [(board.fen(), DEPTH_GRADE, MULTIPV_CANDIDATES)]
+        lines = self.pool.cached(board, DEPTH_GRADE, MULTIPV_CANDIDATES) or []
+        for line in lines[:1]:
+            probe = board.copy(stack=False)
+            try:
+                probe.push(chess.Move.from_uci(line["move"]))
+            except (ValueError, AssertionError):
+                continue
+            jobs.append((probe.fen(), DEPTH_GRADE, 1))
         self.pool.warm(jobs)
 
     def _queue_jobs(self, limit: int = 8) -> list:
@@ -494,16 +540,61 @@ class Drill:
 
         my_node = tree_touch(self.conn, self.root_hash, rs["node_id"],
                              move.uci(), after, self.depth_level, after_phase)
-        self._record(rs, move.uci(), result["verdict"], result["delta_wp"])
-        self.results[self.index] = result["tone"]
+        self._record(rs, move.uci(), result["verdict"], result["delta_wp"],
+                     rs["step"])
+        rs["steps"].append(result["tone"])
+        self.results[self.index] = _worst(rs["steps"])
         rs["answer"] = {
             "my_move": move.uci(), "my_san": san,
             "best_move": best_move.uci(), "best_san": best_san,
             "wp_best": best_eval["wp"], "wp_mine": mine.get("wp"),
             "my_node": my_node, "fen_after": after.fen(),
+            "step": rs["step"], "chain": self.chain,
             "explanation": exp.to_json(), **result,
         }
+        self._advance(rs, after, mine, my_node)
         return rs["answer"]
+
+    def _advance(self, rs, after: chess.Board, mine: dict, my_node) -> None:
+        """Play their reply and ask for the next move of the chain.
+
+        Their reply is the engine's own continuation from the position your
+        move made -- the line it just told you it expects -- so no extra
+        search is needed, and you are answering against best play.
+        """
+        rs["opp_reply"] = None
+        if rs["step"] >= self.chain or after.is_game_over(claim_draw=True):
+            rs["done"] = True
+            return
+        reply_uci = next(iter(mine.get("pv") or []), None)
+        if reply_uci is None:
+            rs["done"] = True
+            return
+        board = after.copy(stack=False)
+        try:
+            reply = chess.Move.from_uci(reply_uci)
+            san = board.san(reply)
+        except (ValueError, AssertionError):
+            rs["done"] = True
+            return
+        if reply not in board.legal_moves:
+            rs["done"] = True
+            return
+        board.push(reply)
+        if board.is_game_over(claim_draw=True):
+            rs["done"] = True
+            rs["opp_reply"] = {"uci": reply_uci, "san": san,
+                               "fen": board.fen(), "final": True}
+            return
+        phase = db.classify_phase(board)
+        rs["opp_reply"] = {"uci": reply_uci, "san": san, "fen": board.fen()}
+        rs["fen"] = board.fen()
+        rs["phase"] = phase
+        rs["hash"] = db.pos_hash(board, phase)
+        rs["node_id"] = tree_touch(self.conn, self.root_hash, my_node,
+                                   reply_uci, board, self.depth_level, phase)
+        rs["step"] += 1
+        self._warm_chain(board)
 
     def show(self) -> dict:
         """Asking to be shown the move marks the round shown. It counts as
@@ -517,30 +608,39 @@ class Drill:
             raise RuntimeError("no engine evaluation for this position")
         move = chess.Move.from_uci(best["move"])
         best_eval, after = self._eval_after(board, move)
-        self._record(rs, None, "shown", None)
-        self.results[self.index] = "shown"
+        self._record(rs, None, "shown", None, rs["step"])
+        rs["steps"].append("shown")
+        self.results[self.index] = _worst(rs["steps"])
+        best_san = board.san(move)
+        my_node = tree_touch(self.conn, self.root_hash, rs["node_id"],
+                             move.uci(), after, self.depth_level,
+                             db.classify_phase(after))
         rs["answer"] = {
             "my_move": None, "my_san": None,
-            "best_move": best["move"], "best_san": board.san(move),
+            "best_move": best["move"], "best_san": best_san,
             "wp_best": best_eval["wp"], "wp_mine": None,
             "verdict": "shown", "label": grading.LABELS["shown"],
-            "delta_wp": None, "delta_cp": None,
+            "delta_wp": None, "delta_cp": None, "tone": "shown",
+            "step": rs["step"], "chain": self.chain, "my_node": my_node,
             "fen_after": after.fen(),
             "explanation": explain_mod.explain(
                 rs["fen"], None, best["move"],
                 {"mine": [], "best": [move.uci()] + (best_eval.get("pv") or [])},
             ).to_json(),
         }
+        # The move you were shown is played, so a chain carries on from it.
+        self._advance(rs, after, best_eval, my_node)
         return rs["answer"]
 
-    def _record(self, rs, my_move, verdict, delta_wp) -> None:
+    def _record(self, rs, my_move, verdict, delta_wp, step: int = 1) -> None:
         """Only real answers are recorded. Navigation records nothing."""
+        opp_move = (rs["opp_reply"] or {}).get("uci") or rs["candidate"]["uci"]
         self.conn.execute(
             "INSERT INTO answers(pos_hash, root_hash, depth_level, opp_move,"
-            " my_move, delta_wp, verdict, answered_at) VALUES(?,?,?,?,?,?,?,?)",
-            (rs["hash"], self.hash, self.depth_level,
-             rs["candidate"]["uci"], my_move, delta_wp, verdict,
-             int(time.time())),
+            " my_move, delta_wp, verdict, answered_at, step)"
+            " VALUES(?,?,?,?,?,?,?,?,?)",
+            (rs["hash"], self.hash, self.depth_level, opp_move, my_move,
+             delta_wp, verdict, int(time.time()), step),
         )
         self.conn.commit()
 
@@ -571,6 +671,7 @@ class Drill:
             "round": self.index + 1,
             "rounds": len(self.order),
             "round_results": list(self.results),
+            "chain": self.chain,
             "has_next_round": self.has_next_round(),
             "node_id": self.node_id,
         }
@@ -586,7 +687,11 @@ class Drill:
                 "node_id_current": rs["node_id"],
                 "legal": legal_map(board),
                 "to_move": "white" if board.turn == chess.WHITE else "black",
-                "can_answer": rs["answer"] is None,
+                "can_answer": not rs["done"],
+                "step": rs["step"],
+                "steps": list(rs["steps"]),
+                "opp_reply": rs["opp_reply"],
+                "done": rs["done"],
             })
         else:
             state.update({"fen": self.fen, "legal": {}, "answer": None,

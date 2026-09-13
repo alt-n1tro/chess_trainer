@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(ROOT, "data", "trainer.db")
 SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _local = threading.local()
 
@@ -54,11 +54,18 @@ def init(path: str = DB_PATH) -> sqlite3.Connection:
 
 
 def migrate(conn: sqlite3.Connection, have: int) -> None:
-    """Apply migrations by version number. Version 1 is the initial schema."""
+    """Apply migrations by version number. Version 1 is the initial schema.
+
+    The script above only creates what is missing, so a migration is needed
+    whenever an existing table changes.
+    """
     if have >= SCHEMA_VERSION:
         return
-    # No migrations yet beyond the initial schema; executescript above is
-    # idempotent (CREATE TABLE IF NOT EXISTS), so bumping is enough.
+    if have < 2:
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(answers)")}
+        if "step" not in columns:
+            conn.execute(
+                "ALTER TABLE answers ADD COLUMN step INTEGER NOT NULL DEFAULT 1")
     conn.execute(
         "UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),)
     )
