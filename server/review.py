@@ -17,6 +17,7 @@ import chess
 import chess.pgn
 
 from . import db, grading, themes
+from . import engine
 from .engine import with_wp
 
 REVIEW_DEPTH = 16          # the floor; simple positions go far deeper, see BUDGET
@@ -66,7 +67,7 @@ def _flip(line: dict) -> dict:
         out["cp"] = -line["cp"]
     if line.get("mate") is not None:
         out["mate"] = -line["mate"]
-    out["wp"] = round(100.0 - (line.get("wp") or 50.0), 3)
+    out["wp"] = round(100.0 - engine.wp_or_even(line.get("wp")), 3)
     return out
 
 
@@ -123,7 +124,8 @@ def review_game(conn, pool, row, depth: int = REVIEW_DEPTH, progress=None,
         before = evals[i]
         after = _flip(evals[i + 1])
         best_uci = before.get("move")
-        delta = max(0.0, (before.get("wp") or 50.0) - (after.get("wp") or 50.0))
+        delta = max(0.0, engine.wp_or_even(before.get("wp"))
+                    - engine.wp_or_even(after.get("wp")))
         rank = 1 if best_uci == move.uci() else None
         mine = dict(before) if rank == 1 else after
         verdict = grading.grade(before, mine, rank)
@@ -143,7 +145,7 @@ def review_game(conn, pool, row, depth: int = REVIEW_DEPTH, progress=None,
         acc = move_accuracy(delta)
         if mover == me:
             my_acc.append(acc)
-            wp = before.get("wp") or 50.0
+            wp = engine.wp_or_even(before.get("wp"))
             my_wps.append(wp if mover == chess.WHITE else 100.0 - wp)
         conn.execute(
             "INSERT INTO review_moves(game_id, ply, is_me, fen, move, best,"
@@ -171,12 +173,15 @@ def review_game(conn, pool, row, depth: int = REVIEW_DEPTH, progress=None,
     return {"game_id": row["id"], "accuracy": accuracy, "plies": len(moves)}
 
 
-def pending(conn, depth: int = REVIEW_DEPTH, limit: int | None = None) -> list:
-    """Your games not yet reviewed at this depth, newest first."""
+def pending(conn, depth: int = REVIEW_DEPTH, limit: int | None = None,
+            redo: bool = False) -> list:
+    """Your games not yet reviewed at this depth, newest first. With
+    ``redo`` every game, so a change to the grading rules can be applied to
+    reviews already done (the engine work is cached, so this is quick)."""
     sql = ("SELECT g.* FROM games g LEFT JOIN reviews r ON r.game_id = g.id"
-           " WHERE g.my_colour IS NOT NULL AND (r.game_id IS NULL OR r.depth < ?)"
+           " WHERE g.my_colour IS NOT NULL AND (? OR r.game_id IS NULL OR r.depth < ?)"
            " ORDER BY g.played_at DESC, g.id DESC")
-    args: list = [depth]
+    args: list = [1 if redo else 0, depth]
     if limit:
         sql += " LIMIT ?"
         args.append(limit)

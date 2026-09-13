@@ -267,6 +267,30 @@ class Themes(unittest.TestCase):
         self.assertEqual(themes.tag(fen, "e2e5", []), [])
 
 
+class MateFlip(unittest.TestCase):
+    """A side being mated sits at 0.0 win probability. Zero is falsy, and
+    the flip once read it as 'no evaluation' and handed back 50%: a forced
+    mate graded as an even game, on both the drill and the review path."""
+    def test_engine_helper_keeps_zero(self):
+        self.assertEqual(engine.wp_or_even(0.0), 0.0)
+        self.assertEqual(engine.wp_or_even(None), 50.0)
+
+    def test_drill_flip_of_a_mated_side_is_a_won_side(self):
+        line = {"cp": None, "mate": -7, "wp": 0.0, "pv": []}
+        self.assertEqual(drills._flip(line)["wp"], 100.0)
+        self.assertEqual(drills._flip(line)["mate"], 7)
+
+    def test_review_flip_of_a_mated_side_is_a_won_side(self):
+        line = {"cp": None, "mate": -3, "wp": 0.0, "pv": []}
+        self.assertEqual(review._flip(line)["wp"], 100.0)
+
+    def test_a_mating_move_is_not_a_blunder(self):
+        best = {"cp": None, "mate": 7, "wp": 100.0}
+        mine = drills._flip({"cp": None, "mate": -8, "wp": 0.0})
+        self.assertNotIn(grading.grade(best, mine, None)["verdict"],
+                         ("mistake", "blunder", "missed_mate"))
+
+
 class Accuracy(unittest.TestCase):
     def test_a_blunder_costs_a_game_real_accuracy(self):
         """Lichess's aggregation: the harmonic mean makes two blunders show

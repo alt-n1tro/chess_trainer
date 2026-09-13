@@ -17,7 +17,7 @@ import urllib.request
 import chess
 import chess.pgn
 
-from . import db
+from . import db, engine
 
 GAMES_DIR = os.path.join(db.ROOT, "data", "games")
 UA = {"User-Agent": "chess-trainer/1.0 (local, single user)"}
@@ -431,7 +431,7 @@ def pool_from_review(conn, game_id: int) -> dict:
         # No material gate here: the engine's evaluation is the balance
         # check, and a pawn up with compensation is exactly what needs
         # practising.
-        my_wp = 100.0 - (r["wp_before"] or 50.0)
+        my_wp = 100.0 - engine.wp_or_even(r["wp_before"])
         if not WP_LOW <= my_wp <= WP_HIGH:
             continue
         survivors.append((r, board))
@@ -442,7 +442,7 @@ def pool_from_review(conn, game_id: int) -> dict:
     for phase in counts:
         mine = [(r, b) for r, b in survivors if r["phase"] == phase]
         for r, board in _spread(mine, MAX_PER_GAME):
-            cp = int(round(_cp_from_wp(100.0 - (r["wp_before"] or 50.0))))
+            cp = int(round(_cp_from_wp(100.0 - engine.wp_or_even(r["wp_before"]))))
             _insert(conn, board, phase, game_id, r["ply"], cp,
                     _tail_from_pgn(pgn, r["ply"]), game["my_colour"], family)
             counts[phase] += 1

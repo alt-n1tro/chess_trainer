@@ -14,6 +14,7 @@ import time
 import chess
 
 from . import db, explain as explain_mod, grading, stats
+from . import engine
 from .engine import DEPTH_CANDIDATES, DEPTH_GRADE, MULTIPV_CANDIDATES, MULTIPV_ROOT
 
 SESSION_ID = "local"          # one local user, one persistent session
@@ -750,7 +751,7 @@ def _flip(line: dict) -> dict:
         out["cp"] = -line["cp"]
     if line.get("mate") is not None:
         out["mate"] = -line["mate"]
-    out["wp"] = round(100.0 - (line.get("wp") or 50.0), 3)
+    out["wp"] = round(100.0 - engine.wp_or_even(line.get("wp")), 3)
     return out
 
 

@@ -258,7 +258,7 @@ def cmd_review(args) -> int:
     """Engine-review your games, newest first. Resumable: already reviewed
     games are skipped, so this can be run again after every import."""
     conn = db.init()
-    todo = review.pending(conn, args.depth, args.limit)
+    todo = review.pending(conn, args.depth, args.limit, redo=args.redo)
     cov = review.coverage(conn)
     if not todo:
         print(f"All {cov['reviewed']} of your games are reviewed at depth"
@@ -422,6 +422,9 @@ def main(argv=None) -> int:
                    help=f"seconds of extra search per position (default {review.BUDGET})")
     p.add_argument("--limit", type=int, metavar="N",
                    help="review at most N games this run")
+    p.add_argument("--redo", action="store_true",
+                   help="review every game again, reviewed ones included"
+                        " (after a grading change; engine work is cached)")
     p.add_argument("--yes", action="store_true", help="skip the confirmation")
     p.set_defaults(func=cmd_review)
 

@@ -51,7 +51,14 @@ def line_wp(line: dict) -> float:
         return 100.0 if line["mate"] > 0 else 0.0
     if line.get("cp") is not None:
         return round(logistic_wp(line["cp"]), 3)
-    return float(line.get("wp") or 50.0)
+    return wp_or_even(line.get("wp"))
+
+
+def wp_or_even(value) -> float:
+    """A missing win probability is an even one. A zero is not missing: a
+    side that is being mated is at 0.0, and ``or 50.0`` would read it as
+    even, which is exactly backwards."""
+    return 50.0 if value is None else float(value)
 
 
 def with_wp(lines: list[dict]) -> list[dict]:
