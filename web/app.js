@@ -946,12 +946,13 @@ function bar(label, value, n, bad) {
 function radar(rows, valueKey) {
   rows = (rows || []).filter((r) => r.n > 0);
   if (rows.length < 3) return "";
-  const size = 420, cx = size / 2, cy = size / 2, R = 140;
+  // Wide enough that the longest label sits inside the drawing on either side.
+  const W = 560, H = 420, cx = W / 2, cy = H / 2, R = 130;
   const n = rows.length;
   const angle = (i) => -Math.PI / 2 + (2 * Math.PI * i) / n;
   const pt = (i, v) => [cx + R * (v / 100) * Math.cos(angle(i)),
                         cy + R * (v / 100) * Math.sin(angle(i))];
-  let svg = `<svg class="radar" viewBox="0 0 ${size} ${size}" role="img" aria-label="radar">`;
+  let svg = `<svg class="radar" viewBox="0 0 ${W} ${H}" role="img" aria-label="radar">`;
   for (const ring of [25, 50, 75, 100]) {
     const pts = rows.map((_, i) => pt(i, ring).join(",")).join(" ");
     svg += `<polygon class="ring" points="${pts}"></polygon>`;
@@ -966,7 +967,7 @@ function radar(rows, valueKey) {
   rows.forEach((r, i) => {
     const [x, y] = pt(i, r[valueKey] || 0);
     svg += `<circle class="pt" cx="${x}" cy="${y}" r="3.5"></circle>`;
-    const [lx, ly] = pt(i, 122);
+    const [lx, ly] = pt(i, 118);
     const anchor = Math.abs(Math.cos(angle(i))) < 0.2 ? "middle"
       : (Math.cos(angle(i)) > 0 ? "start" : "end");
     svg += `<text class="lab ${r.n < 5 ? "thin" : ""}" x="${lx}" y="${ly + 4}" text-anchor="${anchor}">` +
