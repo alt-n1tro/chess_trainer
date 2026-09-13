@@ -175,10 +175,11 @@ async function renderDrill(d) {
 
   const reply = d.opp_reply && !d.done ? d.opp_reply.san : null;
   const more = d.chain > 1 ? ` Move ${d.step} of ${d.chain}.` : "";
+  const asPlayed = d.opp_played_in_game ? " — as in the game" : "";
   el.status.textContent = d.can_answer
     ? (reply ? `They answered ${reply}. Your move.${more}`
-             : `They played ${d.opp_san}. Your move.${more}`)
-    : (a ? `You played ${a.my_san || "—"}.` : `They played ${d.opp_san}.`);
+             : `They played ${d.opp_san}${asPlayed}. Your move.${more}`)
+    : (a ? `You played ${a.my_san || "—"}.` : `They played ${d.opp_san}${asPlayed}.`);
 
   renderContext(d);
   renderProgress(d);
@@ -285,8 +286,10 @@ function renderVerdict(d) {
     const what = d.chain > 1
       ? `Find the best ${d.chain} moves in a row for ${d.my_colour}.`
       : `Find the best reply for ${d.my_colour}.`;
+    const tag = d.opp_played_in_game
+      ? ` <span class="meta">(what they really played)</span>` : "";
     el.verdict.innerHTML =
-      `<div class="ask">They played <b>${esc(d.opp_san)}</b>. ${what}</div>`;
+      `<div class="ask">They played <b>${esc(d.opp_san)}</b>${tag}. ${what}</div>`;
     return;
   }
   const ex = a.explanation || {};
@@ -553,7 +556,8 @@ async function openHelp() {
       ["Enter", "Next position"], ["O / B", "Menu"], ["M", "Cycle mode"],
       ["E", "Set up a position"], ["S", "Save position"], ["Backspace", "Back"],
       ["R", "Replay this position"], ["D", "Drill from here"],
-      ["Space", "Show me the move"], ["1 \u2013 5", "Moves per position"],
+      ["Space", "Show me the move"], ["1 \u2013 5", "Pick the opponent's nth option"],
+      ["Shift+1 \u2013 5", "Moves per position"],
       ["T", "Statistics"],
       ["? / H", "Help"], ["Esc", "Close"],
       ["← →", "In a game: step a move"],
@@ -662,11 +666,15 @@ function closeEditor() {
 
 async function editorGo() {
   const name = ($("ed-name") || {}).value || "";
+  // Close first, then ask: closing after the round-trip would undo anything
+  // opened in the meantime.
+  editor.open = false;
+  el.editor.hidden = true;
   const data = await call("/api/editor/set", {
     pieces: editor.pieces, turn: editor.turn,
     castling: editor.castling || "-", name,
   });
-  if (data) { editor.open = false; el.editor.hidden = true; }
+  if (!data) { editor.open = true; el.editor.hidden = false; }
 }
 
 function show(node, html) {
@@ -893,14 +901,16 @@ el.chainBtn.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
   const key = event.key;
+  // Escape works from anywhere, the search box included: it is how you
+  // leave whatever is open.
   if (key === "Escape") {
     if (anyOverlayOpen()) { event.preventDefault(); return closeOverlays(); }
     if (editor.open) { event.preventDefault(); return closeEditor(); }
     if (pvCursor) { event.preventDefault(); return void leavePv(); }
     return;
   }
+  if (/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
   if (editor.open) return;
   const g = state && state.game;
   const d = state && state.drill;
@@ -908,6 +918,8 @@ document.addEventListener("keydown", (event) => {
     const map = { ArrowLeft: g.ply - 1, ArrowRight: g.ply + 1, Home: 0, End: g.moves.length };
     if (key in map) { event.preventDefault(); return void call("/api/game/goto", { ply: map[key] }); }
   }
+  const shifted = { "!": 1, "@": 2, "#": 3, "$": 4, "%": 5 }[key];
+  if (shifted) { event.preventDefault(); return void call("/api/chain", { moves: shifted }); }
   switch (key.toLowerCase()) {
     case "enter": event.preventDefault(); shownKey = null;
       return void call(g ? "/api/game/play" : "/api/next", {});
@@ -916,7 +928,11 @@ document.addEventListener("keydown", (event) => {
     case "o": case "b": event.preventDefault(); return openMenu();
     case "1": case "2": case "3": case "4": case "5":
       event.preventDefault();
-      return void call("/api/chain", { moves: Number(key) });
+      // Plain digits pick the opponent's nth option; with Shift they set how
+      // many moves in a row a position asks for.
+      if (event.shiftKey) return void call("/api/chain", { moves: Number(key) });
+      if (d) { shownKey = null; return void call("/api/select", { index: Number(key) - 1 }); }
+      return;
     case "m": {
       event.preventDefault();
       const order = ["openings", "middlegame", "endgame"];

@@ -216,6 +216,32 @@ def _worst(tones: list[str]) -> str | None:
     return min(present, key=TONE_ORDER.index)
 
 
+def with_played(kept: list[dict], all_lines: list[dict], played: str | None,
+                board: chess.Board) -> list[dict]:
+    """Mix in the move the opponent really played in the game this position
+    came from. It goes in whatever the engine thinks of it: it happened, and
+    learning to answer what actually happens is the point. Marked, so the
+    panel can say so."""
+    if not played:
+        return kept
+    for c in kept:
+        if c["uci"] == played:
+            c["played"] = True
+            return kept
+    try:
+        move = chess.Move.from_uci(played)
+        if move not in board.legal_moves:
+            return kept
+        san = board.san(move)
+    except (ValueError, AssertionError):
+        return kept
+    line = next((c for c in all_lines if c["uci"] == played), None)
+    entry = dict(line) if line else {"uci": played, "san": san, "cp": None,
+                                     "wp": 50.0, "mate": None, "pv": [played]}
+    entry["played"] = True
+    return kept + [entry]
+
+
 def plausible_moves(candidates: list[dict],
                     max_loss: float = OPPONENT_MAX_LOSS_WP,
                     max_cp: float = OPPONENT_MAX_LOSS_CP,
@@ -252,7 +278,7 @@ class Drill:
     def __init__(self, conn, pool, fen: str, mode: str, *, name=None,
                  source=None, depth_level: int = 0, root_hash=None,
                  node_id=None, parent_node=None, first_move: str | None = None,
-                 chain: int = 1):
+                 chain: int = 1, played_move: str | None = None):
         # No connection is held: sqlite3 objects belong to the thread that
         # created them, and requests arrive on whichever thread is free.
         self.pool = pool
@@ -277,6 +303,7 @@ class Drill:
             conn, self.root_hash, parent_node, None, self.board,
             depth_level, self.phase,
         )
+        self.played_move = played_move       # what they really played here
         self.candidates = self._candidates(first_move)
         self.order = self._order(first_move)
         self.results: list = [None] * len(self.order)   # tone per round, for the dots
@@ -309,6 +336,7 @@ class Drill:
                         "wp": line["wp"], "mate": line["mate"],
                         "pv": line["pv"]})
         kept = plausible_moves(out)
+        kept = with_played(kept, out, self.played_move, self.board)
         if first_move and not any(c["uci"] == first_move for c in kept):
             # The move you were looking at when you asked to drill from here.
             # It came out of the engine's own line, so it is worth answering
@@ -687,6 +715,7 @@ class Drill:
                 "base_fen": self.fen,
                 "opp_move": rs["candidate"]["uci"],
                 "opp_san": rs["candidate"]["san"],
+                "opp_played_in_game": bool(rs["candidate"].get("played")),
                 "answer": rs["answer"],
                 "node_id_current": rs["node_id"],
                 "legal": legal_map(board),

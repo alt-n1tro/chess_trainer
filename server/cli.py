@@ -10,7 +10,7 @@ import time
 import chess
 import chess.pgn
 
-from . import app, corpus, db, engine, review
+from . import app, corpus, db, engine, review, verify
 
 
 class Progress:
@@ -309,6 +309,24 @@ def cmd_review(args) -> int:
     return 0
 
 
+def cmd_verify(args) -> int:
+    """Check the app's moves against a second engine process."""
+    info = engine.probe()
+    if not info["ok"]:
+        print(f"Engine not usable: {info.get('error')}", file=sys.stderr)
+        return 1
+    conn = db.init()
+    if not conn.execute("SELECT 1 FROM positions LIMIT 1").fetchone():
+        print("Nothing to verify yet: review some games first.", file=sys.stderr)
+        return 1
+    pool = engine.Pool()
+    try:
+        result = verify.verify(conn, pool, args.positions)
+    finally:
+        pool.close()
+    return 0 if result["ok"] else 1
+
+
 def cmd_doctor(args) -> int:
     ok = True
     print(f"python      {sys.version.split()[0]}  ({sys.executable})")
@@ -418,6 +436,15 @@ def main(argv=None) -> int:
     p.add_argument("username", nargs="?",
                    help="set it and re-tag stored games; omit to show")
     p.set_defaults(func=cmd_whoami)
+
+    p = sub.add_parser(
+        "verify", help="check the app's moves against a second engine",
+        description="Take positions the gym would give you and ask a fresh,"
+                    " deeper Stockfish -- no cache -- the same questions the"
+                    " app answers. Reports every disagreement and how big it"
+                    " is. Slow: about a minute per position.")
+    p.add_argument("--positions", type=int, default=4, metavar="N")
+    p.set_defaults(func=cmd_verify)
 
     p = sub.add_parser("doctor", help="check the engine, database, venv and port")
     p.set_defaults(func=cmd_doctor)

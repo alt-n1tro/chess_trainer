@@ -167,6 +167,35 @@ class OpponentMoves(unittest.TestCase):
             line["wp"] = engine.line_wp(line)
         self.assertEqual(len(drills.plausible_moves(lines)), 1)
 
+    def test_the_move_they_really_played_is_mixed_in(self):
+        """Whatever the engine thinks of it: it happened."""
+        board = chess.Board()
+        lines = self.lines(30, 25, 18)
+        for i, c in enumerate(lines):
+            c["move"] = ["e2e4", "d2d4", "g1f3"][i]
+            c["uci"], c["san"] = c["move"], board.san(chess.Move.from_uci(c["move"]))
+        kept = drills.with_played(list(lines), lines, "a2a3", board)
+        self.assertEqual(len(kept), 4)
+        self.assertTrue(kept[-1]["played"])
+        self.assertEqual(kept[-1]["san"], "a3")
+
+    def test_a_played_move_already_offered_is_only_marked(self):
+        board = chess.Board()
+        lines = self.lines(30, 25)
+        for i, c in enumerate(lines):
+            c["move"] = ["e2e4", "d2d4"][i]
+            c["uci"], c["san"] = c["move"], board.san(chess.Move.from_uci(c["move"]))
+        kept = drills.with_played(list(lines), lines, "d2d4", board)
+        self.assertEqual(len(kept), 2)
+        self.assertTrue(kept[1]["played"])
+
+    def test_an_illegal_or_absent_played_move_changes_nothing(self):
+        board = chess.Board()
+        lines = self.lines(30)
+        lines[0]["uci"], lines[0]["san"] = "e2e4", "e4"
+        self.assertEqual(len(drills.with_played(list(lines), lines, "e2e5", board)), 1)
+        self.assertEqual(len(drills.with_played(list(lines), lines, None, board)), 1)
+
     def test_there_is_always_a_question(self):
         self.assertEqual(len(drills.plausible_moves(self.lines(0))), 1)
         self.assertEqual(drills.plausible_moves([]), [])

@@ -38,6 +38,7 @@ ever installed with sudo; if a step would need root, the app stops and says so.
 | `./run import <pgn-or-url>` | Import a PGN file, a chess.com game link, or an archive URL. |
 | `./run review` | Engine-review your games: every move graded and tagged for the statistics, and each reviewed game's positions added to the drill pools. `--depth` is a floor (16); simple positions go much deeper within `--budget` seconds. Resumable; run it again after each import. |
 | `./run warm` | Pre-analyse pooled positions so drills never wait. |
+| `./run verify [--positions N]` | Check the app's moves against a second, deeper Stockfish process with no cache: the opponent's options, the reply it calls best, a graded reply, a chain step, and a reviewed move of yours. Prints every disagreement and how big it is. About a minute per position. |
 | `./run whoami [name]` | Show or set which chess.com name is you. `import --player` sets it the first time. |
 | `./run doctor` | Check the engine binary, database, venv and port. |
 | `./run test` | Run the test suite. |
@@ -51,7 +52,7 @@ is reviewed.
 
 ## Keys
 
-`Enter` next · `1`–`5` moves per position · `T` statistics · `O`/`B` menu · `M` cycle mode · `E` set up a position ·
+`Enter` next · `1`–`5` pick the opponent's nth option · `Shift+1`–`5` moves per position · `T` statistics · `O`/`B` menu · `M` cycle mode · `E` set up a position ·
 `S` save · `Backspace` back · `R` reset and replay this position · `?`/`H` help ·
 `Esc` close · `←` `→` step a move in a game · `Home`/`End` jump · `1`–`5` pick
 the nth opponent option.
@@ -101,6 +102,12 @@ trend, not with a number from another site.
 Every number shows how many moves it rests on. Radar labels turn thin under
 five samples: a 40% hit rate on three forks is a hint, not a fact.
 
+You should not have to take the engine's word for it. `./run verify` asks a
+separate Stockfish — its own process, deeper search, nothing cached — the same
+questions the app answered on a handful of positions, and prints where they
+disagree. A few centipawns between two searches is normal; a "best" reply that
+loses a piece would be printed in capitals.
+
 There is no comparison against other players: no public dataset gives
 accuracy or blunder rates by rating for the engine and depth used here, and
 invented benchmarks would be worse than none.
@@ -129,6 +136,10 @@ to five moves, in a random order that uses them all before repeating: the best
 move, the near-equal alternatives, and the weird, inaccurate and outright
 mistaken ones too, because a real opponent plays those and learning to punish
 them is the point.
+
+When the position comes from one of your games, the move your opponent really
+played is one of the options too, whatever the engine thinks of it — it
+happened, and the panel says so when it comes up.
 
 What is withheld is a move that throws the game away — more than 20 points of
 win probability against the opponent's own best, or a whole piece, or walking

@@ -74,9 +74,10 @@ class Trainer:
 
     # -- starting drills
     def new_drill(self, fen: str, *, name=None, source=None,
-                  mode=None) -> Drill:
+                  mode=None, played_move=None) -> Drill:
         drill = Drill(self.conn_t(), self.pool, fen, mode or self.mode,
-                      name=name, source=source, chain=self.chain)
+                      name=name, source=source, chain=self.chain,
+                      played_move=played_move)
         self.stack = [drill]
         self.game = None
         return drill
@@ -86,10 +87,19 @@ class Trainer:
         row = drills.pick_random(conn, self.mode, name, colour)
         if row is None:
             raise LookupError(EMPTY_POOL[self.mode])
+        # What the opponent really played here, when the position comes from
+        # a reviewed game.
+        played = None
+        if row["source_game"] and row["ply"]:
+            hit = conn.execute(
+                "SELECT move FROM review_moves WHERE game_id=? AND ply=?",
+                (row["source_game"], row["ply"])).fetchone()
+            played = hit["move"] if hit else None
         return self.new_drill(row["fen"], name=row["name"],
                               source={"kind": "pool", "phase": row["phase"],
                                       "tail": row["tail_san"],
-                                      "game": self._game_label(row["source_game"])})
+                                      "game": self._game_label(row["source_game"])},
+                              played_move=played)
 
     def _game_label(self, game_id) -> dict | None:
         if not game_id:
