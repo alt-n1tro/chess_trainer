@@ -245,9 +245,14 @@ class Pool:
         The result is cached at the depth actually reached.
         """
         hit = self.cached(board, base, multipv, phase)
+        if hit:
+            # Already searched, and already deepened as far as its budget
+            # allowed the first time. A position reached again -- the same
+            # opening in game after game -- costs nothing now.
+            return hit
         started = time.monotonic()
-        depth = hit[0]["depth"] if hit else base
-        lines = hit or self.analyse(board, base, multipv, slot=slot, phase=phase)
+        depth = base
+        lines = self.analyse(board, base, multipv, slot=slot, phase=phase)
         if not lines:
             return lines
         while depth < cap and time.monotonic() - started < budget:
