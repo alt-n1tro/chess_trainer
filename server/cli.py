@@ -107,6 +107,11 @@ def cmd_web(args) -> int:
 
 def cmd_import(args) -> int:
     conn = db.init()
+    if args.player:
+        return _import_player(conn, args)
+    if not args.source:
+        print("Give a PGN file, a URL, or --player <username>.", file=sys.stderr)
+        return 2
     bar = None
 
     def progress(n):
@@ -133,6 +138,51 @@ def cmd_import(args) -> int:
     if ids and not mine and not corpus.my_username(conn):
         print("None of these are marked as yours: run ./run whoami <username>"
               " and re-import, or they stay out of the phase pools.")
+    print("Next: ./run phases --build")
+    return 0
+
+
+def _import_player(conn, args) -> int:
+    """Import a whole chess.com history, one time class at a time."""
+    user = args.player
+    classes = None if args.time_class == "all" else tuple(
+        c.strip() for c in args.time_class.split(",") if c.strip()
+    )
+    if classes:
+        unknown = [c for c in classes if c not in corpus.TIME_CLASSES]
+        if unknown:
+            print(f"Unknown time class {', '.join(unknown)}. Known:"
+                  f" {', '.join(corpus.TIME_CLASSES)}, or all.", file=sys.stderr)
+            return 2
+    if not corpus.my_username(conn):
+        db.meta_set(conn, "username", user)
+        print(f"You are {user}.")
+
+    bar = Progress(1, "fetching archive list")
+    bar.draw(force=True)
+
+    def progress(done, total, month, counts):
+        bar.total = max(1, total)
+        bar.n = done
+        bar.stage = (f"{month}  {counts['kept']} kept of {counts['seen']} seen")
+        bar.draw()
+
+    try:
+        counts = corpus.import_player(conn, user, classes, args.since, progress)
+    except (LookupError, ValueError) as exc:
+        bar.done()
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        bar.done()
+
+    label = "every time class" if classes is None else ", ".join(classes)
+    print(f"{counts['months']} month(s), {counts['seen']} game(s) on chess.com,"
+          f" {counts['kept']} in {label}, {counts['new']} new to the corpus.")
+    mine = conn.execute(
+        "SELECT COUNT(*) n FROM games WHERE my_colour IS NOT NULL"
+    ).fetchone()["n"]
+    print(f"{mine} game(s) are yours and will feed the pools.")
     print("Next: ./run phases --build")
     return 0
 
@@ -374,7 +424,15 @@ def main(argv=None) -> int:
     p.set_defaults(func=cmd_web)
 
     p = sub.add_parser("import")
-    p.add_argument("source")
+    p.add_argument("source", nargs="?",
+                   help="a PGN file, a chess.com game link, or an archive URL")
+    p.add_argument("--player", metavar="USERNAME",
+                   help="import a chess.com player's whole history")
+    p.add_argument("--time-class", default="rapid",
+                   help="rapid (default), blitz, bullet, daily, a comma-"
+                        "separated list, or all. --player only.")
+    p.add_argument("--since", metavar="YYYY-MM",
+                   help="skip months before this one. --player only.")
     p.set_defaults(func=cmd_import)
 
     p = sub.add_parser("whoami")

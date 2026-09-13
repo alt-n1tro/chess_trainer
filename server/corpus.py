@@ -88,7 +88,8 @@ def detect_colour(headers: dict, me: str | None) -> str | None:
     return None
 
 
-def store_game(conn, game: chess.pgn.Game, url: str | None = None) -> int:
+def store_game(conn, game: chess.pgn.Game, url: str | None = None,
+               time_class: str | None = None) -> int:
     h = dict(game.headers)
     me = my_username(conn)
     colour = detect_colour(h, me)
@@ -105,7 +106,7 @@ def store_game(conn, game: chess.pgn.Game, url: str | None = None) -> int:
         " time_class, played_at, pgn, my_colour) VALUES(?,?,?,?,?,?,?,?,?,?)",
         (url, h.get("White"), h.get("Black"), h.get("Result"),
          _int(h.get("WhiteElo")), _int(h.get("BlackElo")),
-         h.get("TimeControl"), _played_at(h), pgn_text, colour),
+         time_class or h.get("TimeControl"), _played_at(h), pgn_text, colour),
     )
     conn.commit()
     return cur.lastrowid
@@ -126,6 +127,72 @@ def import_pgn_text(conn, text: str, url: str | None = None,
         if progress:
             progress(n)
     return ids
+
+
+ARCHIVES_URL = "https://api.chess.com/pub/player/{user}/games/archives"
+TIME_CLASSES = ("rapid", "blitz", "bullet", "daily")
+
+
+def fetch_archives(username: str) -> list[str]:
+    """Every month chess.com holds games for, oldest first."""
+    raw = fetch_text(ARCHIVES_URL.format(user=username.strip().lower()))
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise LookupError(
+            "chess.com did not return the archive list as JSON."
+        ) from exc
+    months = payload.get("archives") if isinstance(payload, dict) else None
+    if not months:
+        raise LookupError(
+            f"chess.com lists no games for {username}. Check the spelling: it "
+            f"is the username, not the display name."
+        )
+    return list(months)
+
+
+def import_player(conn, username: str, time_classes=("rapid",), since=None,
+                  progress=None) -> dict:
+    """Import a player's whole history, one time class at a time.
+
+    Months are fetched oldest first and games already stored are skipped by
+    URL, so re-running this picks up only what is new.
+    """
+    wanted = {c.lower() for c in time_classes} if time_classes else None
+    months = fetch_archives(username)
+    if since:
+        months = [m for m in months if m[-7:].replace("/", "-") >= since]
+    counts = {"months": len(months), "seen": 0, "kept": 0, "new": 0, "ids": []}
+
+    for i, month in enumerate(months):
+        if progress:
+            progress(i, len(months), month[-7:].replace("/", "-"), counts)
+        try:
+            payload = json.loads(fetch_text(month))
+        except json.JSONDecodeError as exc:
+            raise LookupError(f"{month} did not return JSON.") from exc
+        for entry in payload.get("games", []):
+            counts["seen"] += 1
+            klass = (entry.get("time_class") or "").lower()
+            if wanted and klass not in wanted:
+                continue
+            pgn_text = entry.get("pgn")
+            if not pgn_text:
+                continue
+            game = chess.pgn.read_game(io.StringIO(pgn_text))
+            if game is None or game.end().ply() < 4:
+                continue
+            counts["kept"] += 1
+            before = conn.execute("SELECT COUNT(*) n FROM games").fetchone()["n"]
+            gid = store_game(conn, game, entry.get("url"), klass)
+            after = conn.execute("SELECT COUNT(*) n FROM games").fetchone()["n"]
+            if after > before:
+                counts["new"] += 1
+            counts["ids"].append(gid)
+        conn.commit()
+        if progress:
+            progress(i + 1, len(months), month[-7:].replace("/", "-"), counts)
+    return counts
 
 
 def import_source(conn, source: str, progress=None) -> list[int]:

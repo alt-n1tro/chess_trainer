@@ -15,8 +15,7 @@ outbound network except an explicitly requested chess.com fetch.
 cp /path/to/stockfish vendor/stockfish   # or: ln -s /usr/games/stockfish vendor/stockfish
 chmod +x vendor/stockfish
 ./run doctor                             # engine, DB, venv, port
-./run whoami <your-chess.com-username>   # so the importer knows which side you are
-./run import <pgn-file-or-url>           # a PGN, a chess.com game, or a monthly archive
+./run import --player <your-chess.com-username>   # all your rapid games
 ./run phases --build                     # build the middlegame and endgame pools
 ./run web                                # then open http://127.0.0.1:8770/
 ```
@@ -30,6 +29,7 @@ ever installed with sudo; if a step would need root, the app stops and says so.
 |---|---|
 | `./run web` | Start the server on 8770. Open Firefox yourself. |
 | `./run import <pgn-or-url>` | Import a game or a PGN archive into the corpus. |
+| `./run import --player <name>` | Import a chess.com player's whole history. `--time-class rapid` by default; also `blitz`, `bullet`, `daily`, a comma-separated list, or `all`. `--since YYYY-MM` skips older months. |
 | `./run phases --build` | Rebuild the middlegame and endgame position pools. |
 | `./run phases` | List the current pools with their evals. |
 | `./run tree` | Print recorded answers: per position, per depth, per opponent move. |
@@ -37,6 +37,10 @@ ever installed with sudo; if a step would need root, the app stops and says so.
 | `./run warm` | Pre-analyse everything not yet cached. Long-running. |
 | `./run doctor` | Check engine binary, DB integrity, venv, port availability. |
 | `./run whoami <name>` | Record which chess.com name is you, and re-tag stored games. |
+
+`--player` walks every monthly archive oldest first and skips games already
+stored, so re-running it later picks up only what is new. It sets your username
+the first time, so `whoami` is only needed to change it.
 
 `warm` and `phases --build` state what they will do and require a yes; `--yes`
 skips the gate for scripted use. Everything read-only takes flags and never
