@@ -111,6 +111,61 @@ class Verdicts(unittest.TestCase):
             self.assertIn(legacy, grading.TONES)
 
 
+class OpponentMoves(unittest.TestCase):
+    """The opponent plays moves worth answering, not the engine's fifth choice
+    in a position where one move dominates."""
+
+    def lines(self, *cps):
+        out = []
+        for i, cp in enumerate(cps):
+            line = {"move": f"a{i + 1}a{i + 2}", "cp": cp, "mate": None}
+            line["wp"] = engine.line_wp(line)
+            out.append(line)
+        return out
+
+    def test_a_quiet_position_keeps_all_five(self):
+        kept = drills.plausible_moves(self.lines(30, 25, 18, 10, 5))
+        self.assertEqual(len(kept), 5)
+
+    def test_one_dominant_move_asks_one_question(self):
+        """+423 against +119 is a lost piece: nobody plays the alternatives."""
+        kept = drills.plausible_moves(self.lines(423, 119, 113, 70, 59))
+        self.assertEqual([c["move"] for c in kept], ["a1a2"])
+
+    def test_mistakes_are_still_allowed(self):
+        """A real opponent does drop 80cp; that is worth punishing."""
+        kept = drills.plausible_moves(self.lines(0, -80))
+        self.assertEqual(len(kept), 2)
+
+    def test_blunders_are_not(self):
+        kept = drills.plausible_moves(self.lines(0, -400))
+        self.assertEqual(len(kept), 1)
+
+    def test_a_forced_mate_is_not_declined(self):
+        mate = [{"move": "a1a2", "cp": None, "mate": 2},
+                {"move": "b1b2", "cp": 300, "mate": None}]
+        for line in mate:
+            line["wp"] = engine.line_wp(line)
+        self.assertEqual(len(drills.plausible_moves(mate)), 1)
+
+    def test_a_piece_is_not_handed_over_in_a_won_position(self):
+        """From +900, dropping to +500 is only 8 win-probability points, but
+        it is still a whole piece."""
+        kept = drills.plausible_moves(self.lines(900, 500))
+        self.assertEqual(len(kept), 1)
+
+    def test_walking_into_mate_is_never_plausible(self):
+        lines = [{"move": "a1a2", "cp": -100, "mate": None},
+                 {"move": "b1b2", "cp": None, "mate": -1}]
+        for line in lines:
+            line["wp"] = engine.line_wp(line)
+        self.assertEqual(len(drills.plausible_moves(lines)), 1)
+
+    def test_there_is_always_a_question(self):
+        self.assertEqual(len(drills.plausible_moves(self.lines(0))), 1)
+        self.assertEqual(drills.plausible_moves([]), [])
+
+
 class Positions(unittest.TestCase):
     def test_checkmate_is_not_a_fifty_percent_position(self):
         board = chess.Board("7k/5ppp/8/8/8/8/6PP/R5K1 w - - 0 1")

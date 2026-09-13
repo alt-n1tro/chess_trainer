@@ -179,6 +179,12 @@ body[data-mode]:not([data-mode="openings"]) #btn-openings { display: none; }
 #context .players .you { color: var(--text); font-weight: 600; }
 #context h1 { font-size: 19px; margin: 3px 0 2px; font-weight: 650; letter-spacing: .1px; }
 #context .meta { color: var(--dim); font-size: 13px; }
+#context .meta button.link {
+  background: none; border: none; color: var(--accent); padding: 0 2px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+  font-weight: 600; vertical-align: baseline;
+}
+#context .meta button.link:hover { text-decoration: underline; background: none; }
 #context .tail {
   margin-top: 8px; padding: 7px 10px; background: #14161b; border-radius: 6px;
   color: var(--dim); font-size: 13px;

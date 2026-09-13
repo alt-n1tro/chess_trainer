@@ -1,8 +1,8 @@
 # Chess Trainer
 
 A training tool, not a grading tool. A position is set with the opponent to
-move, Stockfish plays one of its five best moves — a different one each round,
-all five before any repeats — and you find the best reply. Nothing on screen
+move, Stockfish plays one of its best moves — a different one each round, all
+of them before any repeats — and you find the best reply. Nothing on screen
 hints at the answer. When you have played, the verdict says what your move
 actually was: **Best move**, **Second best**, **Third best**, or, when it costs
 enough, **Inaccuracy**, **Mistake** or **Blunder**. Then it shows the engine's
@@ -60,6 +60,20 @@ prompts.
 `Esc` close · `←` `→` step a move in a game · `Home`/`End` jump · `1`–`5` pick
 the nth opponent option.
 
+## What the opponent plays
+
+The engine's top five, minus the ones a real opponent would never play. Its
+second to fifth choices are only near-equal in a quiet position; where one move
+dominates — a hanging piece, a forced recapture — its fifth choice throws the
+game away, and drilling against a blunder nobody would play teaches nothing.
+
+A candidate is dropped if it gives up more than 10 points of win probability,
+or more than 200 centipawns, against the opponent's own best move, or if it
+walks into mate. So a quiet position asks five questions and a position with
+one good move asks one — the panel says which, as *Position 2 of 5* or
+*Position 1 of 1*. Both thresholds are constants at the top of
+`server/drills.py` if you want a busier or a quieter opponent.
+
 ## Verdicts
 
 Graded in win probability, converted from the engine's evaluation with the
@@ -82,6 +96,9 @@ Both your move and the engine's are measured the same way — by the position
 each one leads to, searched to the same depth — so playing the engine's move
 always scores exactly zero, and a move outside its top five is not judged by a
 different yardstick than one inside it.
+
+The **FEN** link next to the position name copies it, so you can check any
+recommendation on chess.com or lichess yourself.
 
 **Replay** puts the same question back: the same position, the same opponent
 move, your answer cleared. It never draws a different move. **Drill from here**

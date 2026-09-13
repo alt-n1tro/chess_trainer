@@ -208,7 +208,9 @@ function renderContext(d) {
   html += `<h1>${esc(d.name || MODE_LABEL[d.mode])}</h1>`;
   const bits = [d.phase];
   if (d.depth_level) bits.push(`level ${d.depth_level}`);
-  html += `<div class="meta">${bits.join(" · ")} · you are ${d.my_colour}</div>`;
+  html += `<div class="meta">${bits.join(" · ")} · you are ${d.my_colour}` +
+    ` <button class="link" data-act="fen" title="Copy this position as FEN,` +
+    ` to check it anywhere else">FEN</button></div>`;
   if (src.tail) html += `<div class="tail">${esc(src.tail)}</div>`;
   el.context.innerHTML = html;
 }
@@ -722,6 +724,17 @@ document.addEventListener("click", async (event) => {
         (state.drill && state.drill.name) || "");
       if (name === null) return;
       if (await call("/api/save", { name })) toast("Saved.");
+      return;
+    }
+    case "fen": {
+      const d = state.drill;
+      const fen = (d && (d.answer ? d.answer.fen_after : d.fen)) || "";
+      try {
+        await navigator.clipboard.writeText(fen);
+        toast(`Copied: ${fen}`);
+      } catch (err) {
+        window.prompt("Copy this position", fen);
+      }
       return;
     }
     case "pv": return walkPv(hit.dataset.kind, Number(hit.dataset.i));

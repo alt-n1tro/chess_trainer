@@ -22,6 +22,18 @@ ROUNDS = MULTIPV_CANDIDATES
 RECENCY_COLD = 10             # the last 10 positions drawn: weight 0
 RECENCY_RAMP = 20             # ramp back to 1 over the following 20
 
+# How much the opponent is allowed to give up, in win-probability points, for
+# a move to be worth answering. The engine's second to fifth choices are only
+# near-equal in a quiet position; where one move dominates -- a hanging piece,
+# a forced recapture -- its fifth choice throws the game away, and drilling
+# against a blunder nobody would play teaches nothing. Same threshold as a
+# "mistake" in your own grading.
+OPPONENT_MAX_LOSS_WP = grading.MISTAKE_WP
+# And a material guard. Win probability is flat at extreme evaluations, so from
+# +9 a move to +5 costs only a few points -- but it is still a piece, and an
+# opponent who is winning does not hand one over.
+OPPONENT_MAX_LOSS_CP = 200.0
+
 MODES = ("openings", "middlegame", "endgame")
 MODE_PHASE = {"openings": "opening", "middlegame": "middlegame",
               "endgame": "endgame"}
@@ -192,6 +204,33 @@ def groups(conn, mode: str) -> list[dict]:
 
 # --- the drill -------------------------------------------------------------
 
+def plausible_moves(candidates: list[dict],
+                    max_loss: float = OPPONENT_MAX_LOSS_WP,
+                    max_cp: float = OPPONENT_MAX_LOSS_CP) -> list[dict]:
+    """Drop the moves the opponent would never play.
+
+    `candidates` are the engine's lines for the side to move, best first,
+    scored from that side. A move goes if it gives up more than `max_loss`
+    win probability, or more than `max_cp` centipawns, against their own best.
+    The best move always stays, so there is always a question to answer.
+    """
+    if not candidates:
+        return candidates
+    best = candidates[0]
+    kept = []
+    for line in candidates:
+        if best["wp"] - line["wp"] > max_loss:
+            continue
+        if best.get("cp") is not None and line.get("cp") is not None:
+            if best["cp"] - line["cp"] > max_cp:
+                continue
+        if line.get("mate") is not None and line["mate"] < 0 \
+                and best.get("mate") != line.get("mate"):
+            continue                     # walking into mate is never plausible
+        kept.append(line)
+    return kept or candidates[:1]
+
+
 class Drill:
     """One ask-root and its five rounds."""
 
@@ -232,6 +271,12 @@ class Drill:
 
     # -- candidates
     def _candidates(self) -> list[dict]:
+        """The opponent's moves worth answering.
+
+        The engine's top five, scored from the opponent's side, minus the ones
+        that give up too much: a position with a single good move should ask
+        one question, not five, four of which nobody would ever face.
+        """
         lines = self.pool.analyse(self.board, DEPTH_CANDIDATES,
                                   MULTIPV_CANDIDATES, phase=self.phase)
         out = []
@@ -244,7 +289,7 @@ class Drill:
             out.append({"uci": line["move"], "san": san, "cp": line["cp"],
                         "wp": line["wp"], "mate": line["mate"],
                         "pv": line["pv"]})
-        return out
+        return plausible_moves(out)
 
     def _faced(self, uci: str) -> int:
         row = self.conn.execute(
