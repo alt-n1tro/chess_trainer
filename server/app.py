@@ -625,6 +625,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({"fen": t.game_state()["fen"]})
 
         if path == "/api/stats/games":
+            # Reviews stored under the old plain-mean accuracy are recomputed
+            # from their move rows once; no engine needed.
+            if db.meta_get(conn, "accuracy_method") != "lichess":
+                from . import review as review_mod
+                review_mod.recompute(conn)
+                db.meta_set(conn, "accuracy_method", "lichess")
             return self.json(stats.games_view(conn))
 
         if path == "/api/stats/gym":

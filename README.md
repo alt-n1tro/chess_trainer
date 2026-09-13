@@ -90,6 +90,14 @@ defensive move, promotion, king attack, quiet move. From that:
 a chain (does it hold up once you have to follow a plan?), by drill-from-here
 level, by theme, and by opening, plus your last fifty answers.
 
+Accuracy is computed lichess's way: each move gets an accuracy from the win
+probability it cost, and a game's accuracy is the average of a
+volatility-weighted mean and the harmonic mean of those. The harmonic mean is
+the part that matters — it makes two blunders show through forty good moves,
+where a plain mean would hide them. Chess.com's formula is unpublished and reads
+a few points lower again for the same player; compare yourself with your own
+trend, not with a number from another site.
+
 Every number shows how many moves it rests on. Radar labels turn thin under
 five samples: a 40% hit rate on three forks is a hint, not a fact.
 

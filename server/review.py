@@ -30,6 +30,35 @@ def move_accuracy(delta_wp: float) -> float:
     return max(0.0, min(100.0, acc))
 
 
+def game_accuracy(move_accs: list[float], white_wps: list[float]) -> float | None:
+    """A game's accuracy the way lichess computes it (lila, AccuracyPercent):
+    the average of a volatility-weighted mean and the harmonic mean of the
+    move accuracies. The harmonic mean is what makes a blunder cost a game
+    real accuracy; a plain mean lets two blunders hide behind forty good
+    moves.
+
+    `move_accs` are this side's move accuracies, in order. `white_wps` is the
+    game's win probability from White's side before each of this side's
+    moves, used to weight moves in volatile stretches more heavily.
+    """
+    n = len(move_accs)
+    if not n:
+        return None
+    window = max(2, min(8, n // 10))
+    weights = []
+    for i in range(n):
+        lo = max(0, i - window + 1)
+        slice_ = white_wps[lo:i + 1]
+        if len(slice_) < 2:
+            slice_ = white_wps[:window]
+        mean = sum(slice_) / len(slice_)
+        std = (sum((x - mean) ** 2 for x in slice_) / len(slice_)) ** 0.5
+        weights.append(max(0.5, min(12.0, std)))
+    weighted = sum(a * w for a, w in zip(move_accs, weights)) / sum(weights)
+    harmonic = n / sum(1.0 / max(a, 1.0) for a in move_accs)
+    return round((weighted + harmonic) / 2, 1)
+
+
 def _flip(line: dict) -> dict:
     out = dict(line)
     if line.get("cp") is not None:
@@ -84,7 +113,7 @@ def review_game(conn, pool, row, depth: int = REVIEW_DEPTH, progress=None) -> di
         evals = list(ex.map(analyse, range(len(boards))))
 
     conn.execute("DELETE FROM review_moves WHERE game_id=?", (row["id"],))
-    my_acc = []
+    my_acc, my_wps = [], []
     for i, move in enumerate(moves):
         board = boards[i]
         mover = board.turn
@@ -111,6 +140,8 @@ def review_game(conn, pool, row, depth: int = REVIEW_DEPTH, progress=None) -> di
         acc = move_accuracy(delta)
         if mover == me:
             my_acc.append(acc)
+            wp = before.get("wp") or 50.0
+            my_wps.append(wp if mover == chess.WHITE else 100.0 - wp)
         conn.execute(
             "INSERT INTO review_moves(game_id, ply, is_me, fen, move, best,"
             " wp_before, wp_after, delta_wp, verdict, accuracy, mate_in,"
@@ -121,7 +152,7 @@ def review_game(conn, pool, row, depth: int = REVIEW_DEPTH, progress=None) -> di
              verdict["verdict"], round(acc, 1), mate_in, kept, phase,
              json.dumps(tags), json.dumps(allowed) if allowed is not None else None),
         )
-    accuracy = round(sum(my_acc) / len(my_acc), 1) if my_acc else None
+    accuracy = game_accuracy(my_acc, my_wps)
     conn.execute(
         "INSERT OR REPLACE INTO reviews(game_id, depth, engine_ver, reviewed_at,"
         " accuracy, plies) VALUES(?,?,?,?,?,?)",
@@ -141,6 +172,25 @@ def pending(conn, depth: int = REVIEW_DEPTH, limit: int | None = None) -> list:
         sql += " LIMIT ?"
         args.append(limit)
     return conn.execute(sql, args).fetchall()
+
+
+def recompute(conn) -> int:
+    """Recompute every stored game accuracy from its move rows. Needs no
+    engine; used when the aggregation changes."""
+    n = 0
+    for g in conn.execute("SELECT game_id FROM reviews").fetchall():
+        rows = conn.execute(
+            "SELECT m.accuracy, m.wp_before, m.ply FROM review_moves m"
+            " WHERE m.game_id=? AND m.is_me=1 ORDER BY m.ply", (g["game_id"],)
+        ).fetchall()
+        accs = [r["accuracy"] for r in rows if r["accuracy"] is not None]
+        wps = [(r["wp_before"] if r["ply"] % 2 == 1 else 100.0 - r["wp_before"])
+               for r in rows if r["accuracy"] is not None]
+        conn.execute("UPDATE reviews SET accuracy=? WHERE game_id=?",
+                     (game_accuracy(accs, wps), g["game_id"]))
+        n += 1
+    conn.commit()
+    return n
 
 
 def coverage(conn) -> dict:

@@ -233,6 +233,22 @@ class Themes(unittest.TestCase):
 
 
 class Accuracy(unittest.TestCase):
+    def test_a_blunder_costs_a_game_real_accuracy(self):
+        """Lichess's aggregation: the harmonic mean makes two blunders show
+        through forty good moves, where a plain mean would hide them."""
+        accs = [97.0] * 38 + [8.0, 12.0]
+        plain = sum(accs) / len(accs)
+        lichess = review.game_accuracy(accs, [50.0] * 40)
+        self.assertGreater(plain, 90)
+        self.assertLess(lichess, 82)
+        self.assertGreater(lichess, 70)
+
+    def test_a_clean_game_stays_clean(self):
+        self.assertGreater(review.game_accuracy([96.0] * 30, [50.0] * 30), 95)
+
+    def test_no_moves_no_accuracy(self):
+        self.assertIsNone(review.game_accuracy([], []))
+
     def test_lichess_curve(self):
         self.assertAlmostEqual(review.move_accuracy(0), 100.0, places=1)
         self.assertGreater(review.move_accuracy(5), review.move_accuracy(10))
