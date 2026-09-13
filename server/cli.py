@@ -398,7 +398,8 @@ def cmd_review(args) -> int:
                 bar.stage = f"{label}  {i}/{n}"
                 bar.draw()
 
-            summary = review.review_game(conn, pool, row, args.depth, progress)
+            summary = review.review_game(conn, pool, row, args.depth, progress,
+                                         budget=args.budget)
             done += 1
             if summary and summary["accuracy"] is not None and not bar.enabled:
                 print(f"  {label}: accuracy {summary['accuracy']}")
@@ -513,6 +514,9 @@ def main(argv=None) -> int:
     p.add_argument("--depth", type=int, default=review.REVIEW_DEPTH)
     p.add_argument("--limit", type=int, default=None,
                    help="review at most this many games (newest first)")
+    p.add_argument("--budget", type=float, default=review.BUDGET,
+                   help="seconds of extra search per position beyond --depth;"
+                        " simple positions use it to go much deeper")
     p.add_argument("--yes", action="store_true")
     p.set_defaults(func=cmd_review)
 

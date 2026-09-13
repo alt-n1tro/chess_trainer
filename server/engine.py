@@ -176,12 +176,19 @@ class Pool:
 
     def cached(self, board: chess.Board, depth: int, multipv: int, phase=None):
         conn = db.connect(self.db_path)
+        # Anything at least this deep answers the question; the deepest wins.
+        # Shallower never does: a lookup at 20 that finds only 12 is a miss.
         row = conn.execute(
-            "SELECT lines FROM analysis WHERE pos_hash=? AND depth=? AND multipv=?"
-            " AND engine_ver=?",
+            "SELECT lines, depth FROM analysis WHERE pos_hash=? AND depth>=?"
+            " AND multipv=? AND engine_ver=? ORDER BY depth DESC LIMIT 1",
             (db.pos_hash(board, phase), depth, multipv, self.version),
         ).fetchone()
-        return with_wp(json.loads(row["lines"])) if row else None
+        if not row:
+            return None
+        lines = with_wp(json.loads(row["lines"]))
+        for line in lines:
+            line["depth"] = row["depth"]
+        return lines
 
     def _store(self, board, depth, multipv, lines, phase=None) -> None:
         conn = db.connect(self.db_path)
@@ -213,7 +220,33 @@ class Pool:
         infos = target.analyse(board, depth, multipv)
         lines = _lines_from_info(board, infos, multipv)
         self._store(board, depth, multipv, lines, phase)
+        for line in lines:
+            line["depth"] = depth
         return with_wp(lines)
+
+    def analyse_deep(self, board: chess.Board, base: int, multipv: int = 1,
+                     budget: float = 0.6, cap: int = 40, step: int = 4,
+                     slot: str = "fg", phase=None) -> list[dict]:
+        """Search to `base`, then keep deepening while the search stays cheap.
+
+        Simple positions -- endgames above all -- reach the base depth in
+        milliseconds and go on to 30 or 40 in the same time a middlegame
+        takes to reach the base. The engine keeps its hash table between
+        calls, so each step builds on the last rather than starting over.
+        The result is cached at the depth actually reached.
+        """
+        hit = self.cached(board, base, multipv, phase)
+        started = time.monotonic()
+        depth = hit[0]["depth"] if hit else base
+        lines = hit or self.analyse(board, base, multipv, slot=slot, phase=phase)
+        if not lines:
+            return lines
+        while depth < cap and time.monotonic() - started < budget:
+            depth = min(cap, depth + step)
+            lines = self.analyse(board, depth, multipv, slot=slot, phase=phase)
+            if not lines:
+                break
+        return lines
 
     # --- warming ----------------------------------------------------------
 

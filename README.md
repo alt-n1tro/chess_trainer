@@ -42,7 +42,7 @@ ever installed with sudo; if a step would need root, the app stops and says so.
 | `./run leaks` | Print the current leak list. |
 | `./run warm` | Pre-analyse everything not yet cached. Long-running. |
 | `./run doctor` | Check engine binary, DB integrity, venv, port availability. |
-| `./run review [--depth 16] [--limit N]` | Engine-review your games for the statistics. Resumable; run it again after each import. |
+| `./run review [--depth 16] [--budget 0.6] [--limit N]` | Engine-review your games for the statistics. `--depth` is a floor: every position gets at least that, and while a search stays cheap it keeps deepening — an endgame reaches 30–40 in the time a middlegame takes to reach 16. Resumable; run it again after each import. |
 | `./run test` | Run the test suite. |
 | `./run whoami <name>` | Record which chess.com name is you, and re-tag stored games. |
 

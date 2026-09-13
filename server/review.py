@@ -19,7 +19,8 @@ import chess.pgn
 from . import db, grading, themes
 from .engine import with_wp
 
-REVIEW_DEPTH = 16          # what the game-review sites use; --depth raises it
+REVIEW_DEPTH = 16          # the floor; simple positions go far deeper, see BUDGET
+BUDGET = 0.6               # seconds of extra search allowed per position
 MATE_HORIZON = 11          # a mate this long or shorter counts as one you had
 
 
@@ -78,7 +79,8 @@ def _final(board: chess.Board) -> dict | None:
     return None
 
 
-def review_game(conn, pool, row, depth: int = REVIEW_DEPTH, progress=None) -> dict | None:
+def review_game(conn, pool, row, depth: int = REVIEW_DEPTH, progress=None,
+                budget: float = BUDGET) -> dict | None:
     """Review one game. Returns a summary, or None if it cannot be parsed."""
     game = chess.pgn.read_game(io.StringIO(row["pgn"]))
     if game is None or row["my_colour"] not in ("white", "black"):
@@ -102,8 +104,9 @@ def review_game(conn, pool, row, depth: int = REVIEW_DEPTH, progress=None) -> di
         done = _final(board)
         if done is not None:
             return done
-        lines = pool.analyse(board, depth, 1, slot="fg" if i % 2 == 0 else "bg",
-                             phase=db.classify_phase(board))
+        lines = pool.analyse_deep(board, depth, 1, budget=budget,
+                                  slot="fg" if i % 2 == 0 else "bg",
+                                  phase=db.classify_phase(board))
         if progress:
             progress(i, len(boards))
         return with_wp(lines)[0] if lines else {"move": None, "cp": 0, "mate": None,
@@ -145,12 +148,13 @@ def review_game(conn, pool, row, depth: int = REVIEW_DEPTH, progress=None) -> di
         conn.execute(
             "INSERT INTO review_moves(game_id, ply, is_me, fen, move, best,"
             " wp_before, wp_after, delta_wp, verdict, accuracy, mate_in,"
-            " kept_mate, phase, themes, allowed)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " kept_mate, phase, themes, allowed, depth)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (row["id"], i + 1, 1 if mover == me else 0, board.fen(), move.uci(),
              best_uci, before.get("wp"), after.get("wp"), round(delta, 2),
              verdict["verdict"], round(acc, 1), mate_in, kept, phase,
-             json.dumps(tags), json.dumps(allowed) if allowed is not None else None),
+             json.dumps(tags), json.dumps(allowed) if allowed is not None else None,
+             before.get("depth") or depth),
         )
     accuracy = game_accuracy(my_acc, my_wps)
     conn.execute(
