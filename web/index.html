@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chess Trainer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-mode="openings">
+
+<main id="screen">
+  <section id="left">
+    <div id="board" aria-label="chess board"></div>
+    <div id="board-foot"></div>
+    <div id="menu" class="overlay" hidden></div>
+    <div id="editor" class="overlay" hidden></div>
+    <div id="help" class="overlay" hidden></div>
+  </section>
+
+  <section id="panel">
+    <header id="bar">
+      <button id="btn-game" class="ghost" title="Load a game by URL">Game</button>
+      <button id="btn-help" class="ghost" title="Help, statistics and leaks">?</button>
+      <div id="mode-wrap">
+        <button id="btn-mode" class="ghost"></button>
+        <ul id="mode-list" hidden></ul>
+      </div>
+    </header>
+
+    <div id="pick">
+      <button id="btn-random" class="primary">Random</button>
+      <button id="btn-openings">Openings</button>
+    </div>
+
+    <div id="tree" aria-label="drill tree"></div>
+
+    <div id="drill"></div>
+    <div id="note"></div>
+  </section>
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

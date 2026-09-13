@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+data/trainer.db
+data/trainer.db-wal
+data/trainer.db-shm
+data/games/*
+!data/games/.gitkeep
+vendor/stockfish
