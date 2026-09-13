@@ -33,31 +33,22 @@ ever installed with sudo; if a step would need root, the app stops and says so.
 
 | Command | Effect |
 |---|---|
-| `./run web` | Start the server on 8770. Open Firefox yourself. |
-| `./run import <pgn-or-url>` | Import a game or a PGN archive into the corpus. |
-| `./run import --player <name>` | Import a chess.com player's whole history. `--time-class rapid` by default; also `blitz`, `bullet`, `daily`, a comma-separated list, or `all`. `--since YYYY-MM` skips older months. |
-| `./run phases --build` | Rebuild the middlegame and endgame position pools. |
-| `./run phases` | List the current pools with their evals. |
-| `./run tree` | Print recorded answers: per position, per depth, per opponent move. |
-| `./run leaks` | Print the current leak list. |
-| `./run warm` | Pre-analyse everything not yet cached. Long-running. |
-| `./run doctor` | Check engine binary, DB integrity, venv, port availability. |
-| `./run review [--depth 16] [--budget 0.6] [--limit N]` | Engine-review your games for the statistics. `--depth` is a floor: every position gets at least that, and while a search stays cheap it keeps deepening — an endgame reaches 30–40 in the time a middlegame takes to reach 16. Resumable; run it again after each import. |
+| `./run web` | Start the app on 127.0.0.1:8770. Open Firefox yourself. |
+| `./run import --player <name>` | Import a chess.com player's whole history. `--time-class rapid` by default; also `blitz`, `bullet`, `daily`, a comma-separated list, or `all`. `--since YYYY-MM` skips older months. Re-running picks up only what is new. |
+| `./run import <pgn-or-url>` | Import a PGN file, a chess.com game link, or an archive URL. |
+| `./run review` | Engine-review your games: every move graded and tagged for the statistics, and each reviewed game's positions added to the drill pools. `--depth` is a floor (16); simple positions go much deeper within `--budget` seconds. Resumable; run it again after each import. |
+| `./run phases` | List the drill pools. `--build` adds games that are imported but not yet pooled — reviewed ones instantly, the rest with the engine. `--rebuild` starts over. |
+| `./run warm` | Pre-analyse pooled positions so drills never wait. |
+| `./run whoami [name]` | Show or set which chess.com name is you. `import --player` sets it the first time. |
+| `./run doctor` | Check the engine binary, database, venv and port. |
 | `./run test` | Run the test suite. |
-| `./run whoami <name>` | Record which chess.com name is you, and re-tag stored games. |
 
-Reviewing a game also adds its positions to the drill pools, so after
-`./run review` there is nothing else to run. `./run phases --build` is for
-games that are imported but not reviewed; it is incremental, and
-`--rebuild` starts the pools over.
+`./run help` prints the same from the program itself, and every command
+takes `--help`. Commands that take time say what they will do and wait for a
+yes; `--yes` skips the question. Everything that only reads never prompts.
 
-`--player` walks every monthly archive oldest first and skips games already
-stored, so re-running it later picks up only what is new. It sets your username
-the first time, so `whoami` is only needed to change it.
-
-`warm` and `phases --build` state what they will do and require a yes; `--yes`
-skips the gate for scripted use. Everything read-only takes flags and never
-prompts.
+The usual order is import, review, web. Reviewing a game also pools it, so
+`phases --build` is only for games you imported and chose not to review.
 
 ## Keys
 

@@ -31,31 +31,10 @@ MSG
 }
 
 usage() {
-    cat <<'MSG'
-./run <command>
-
-  web                     Start the server on 127.0.0.1:8770
-  import <pgn-or-url>     Import a game or a PGN archive into the corpus
-  import --player <name> [--time-class rapid] [--since YYYY-MM]
-                          Import a chess.com player's whole history for one
-                          time control. rapid by default; also blitz, bullet,
-                          daily, a comma-separated list, or all. Re-running
-                          picks up only what is new.
-  phases --build          Rebuild the middlegame and endgame pools
-  phases                  List the current pools with their evals
-  tree                    Print recorded answers, per position and depth
-  leaks                   Print the current leak list
-  review [--depth 16] [--limit N]
-                          Engine-review your games for the statistics.
-                          Resumable; run it again after each import.
-  warm                    Pre-analyse everything not yet cached
-  doctor                  Check engine, DB, venv, port
-  whoami <username>       Record which chess.com name is you
-  test                    Run the test suite
-
-Read-only commands take flags and never prompt. warm and phases --build
-confirm before starting; --yes skips the gate.
-MSG
+    ensure_venv
+    "$PY" -m server.cli --help
+    echo
+    echo "  test                    Run the test suite"
 }
 
 cmd="${1:-}"
@@ -63,7 +42,7 @@ cmd="${1:-}"
 
 case "$cmd" in
     ""|-h|--help|help) usage ;;
-    web|import|phases|tree|leaks|warm|review|doctor|whoami)
+    web|import|review|phases|warm|whoami|doctor)
         ensure_venv
         exec "$PY" -m server.cli "$cmd" "$@"
         ;;
@@ -73,7 +52,7 @@ case "$cmd" in
         ;;
     *)
         echo "Unknown command: $cmd" >&2
-        usage >&2
+        echo "Try ./run help" >&2
         exit 2
         ;;
 esac

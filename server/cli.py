@@ -10,7 +10,7 @@ import time
 import chess
 import chess.pgn
 
-from . import app, corpus, db, drills, engine, review
+from . import app, corpus, db, engine, review
 
 
 class Progress:
@@ -205,8 +205,9 @@ def cmd_whoami(args) -> int:
 
 
 def cmd_phases(args) -> int:
+    """List the drill pools, or add games to them."""
     conn = db.init()
-    if not args.build:
+    if not args.build and not args.rebuild:
         rows = conn.execute(
             "SELECT phase, name, my_colour, eval_cp, tail_san FROM positions"
             " ORDER BY phase, name, eval_cp"
@@ -227,99 +228,66 @@ def cmd_phases(args) -> int:
         "SELECT COUNT(*) n FROM games WHERE my_colour IS NOT NULL"
     ).fetchone()["n"]
     if not games:
-        print("No games of yours are imported. ./run import <pgn-or-url> first,"
-              " and ./run whoami <username> so the importer knows which side"
-              " you are.", file=sys.stderr)
+        print("No games of yours are imported. ./run import --player <name>"
+              " first.", file=sys.stderr)
         return 1
     existing = conn.execute("SELECT COUNT(*) n FROM positions").fetchone()["n"]
-    new = conn.execute(
-        "SELECT COUNT(*) n FROM games g WHERE g.my_colour IS NOT NULL AND NOT EXISTS"
-        " (SELECT 1 FROM positions p WHERE p.source_game=g.id)").fetchone()["n"]
-    if not args.rebuild and not new:
+    if args.rebuild:
+        pending = games
+    else:
+        pending = conn.execute(
+            "SELECT COUNT(*) n FROM games g WHERE g.my_colour IS NOT NULL"
+            " AND NOT EXISTS (SELECT 1 FROM positions p WHERE p.source_game=g.id)"
+        ).fetchone()["n"]
+    if not pending:
         print(f"All {games} game(s) are pooled already ({existing} positions)."
               " --rebuild starts over.")
         return 0
-    if not confirm(
-        (f"Rebuild the pools from {games} game(s).\n"
-         f"  - deletes and replaces the current {existing} pooled position(s)\n")
-        if args.rebuild else
-        (f"Add {new} new game(s) to the pools ({existing} positions already).\n"
-         f"  - reviewed games are pooled from their review, no engine time\n"),
-        f"  - analyses each candidate at depth {engine.DEPTH_FILTER}, survivors"
-        f" at depth {engine.DEPTH_GRADE}\n"
-        f"  - cached analysis is kept and reused; rough estimate"
-        f" {_dur(games * 12)}\n", args.yes,
-    ):
+    unreviewed = conn.execute(
+        "SELECT COUNT(*) n FROM games g WHERE g.my_colour IS NOT NULL"
+        " AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.game_id=g.id)"
+        + ("" if args.rebuild else
+           " AND NOT EXISTS (SELECT 1 FROM positions p WHERE p.source_game=g.id)")
+    ).fetchone()["n"]
+
+    lines = [
+        (f"Rebuild the pools from all {games} game(s), replacing the current"
+         f" {existing} position(s).") if args.rebuild else
+        (f"Add {pending} game(s) to the pools ({existing} positions already)."),
+        f"  - {pending - unreviewed} reviewed game(s) are pooled from their"
+        f" review: no engine time",
+    ]
+    if unreviewed:
+        lines.append(
+            f"  - {unreviewed} unreviewed game(s) are searched at depth"
+            f" {engine.DEPTH_FILTER}, survivors at {engine.DEPTH_GRADE}:"
+            f" roughly {_dur(unreviewed * 12)}")
+    if not confirm("\n".join(lines) + "\n", args.yes):
         return 1
 
-    info = engine.probe()
-    if not info["ok"]:
-        print(f"Engine not usable: {info.get('error')}", file=sys.stderr)
-        return 1
-    pool = engine.Pool()
-    bar = Progress(games, "analysing")
+    pool = None
+    if unreviewed:
+        info = engine.probe()
+        if not info["ok"]:
+            print(f"Engine not usable: {info.get('error')}", file=sys.stderr)
+            return 1
+        pool = engine.Pool()
+    bar = Progress(pending, "pooling")
     try:
         def progress(gi, total, examined):
             bar.total = max(1, total)
             bar.n = gi
-            bar.stage = f"analysing game {gi + 1}/{total}, {examined} positions seen"
+            bar.stage = f"game {gi + 1}/{total}, {examined} positions searched"
             bar.draw()
 
-        counts = corpus.build_phases(conn, pool, progress=progress, log=print,
+        counts = corpus.build_phases(conn, pool, progress=progress,
                                      rebuild=args.rebuild)
     finally:
         bar.done()
-        pool.close()
+        if pool:
+            pool.close()
     print(f"openings {counts['opening']}, middlegame {counts['middlegame']},"
-          f" endgame {counts['endgame']}"
-          f"  (from {counts['games']} games, {counts['examined']} candidates)")
-    return 0
-
-
-def cmd_tree(args) -> int:
-    conn = db.init()
-    rows = conn.execute(
-        "SELECT pos_hash, root_hash, depth_level, opp_move, my_move, verdict,"
-        " delta_wp, COUNT(*) n FROM answers"
-        " GROUP BY pos_hash, depth_level, opp_move, my_move"
-        " ORDER BY root_hash, depth_level, opp_move"
-    ).fetchall()
-    if not rows:
-        print("No answers recorded yet.")
-        return 0
-    root = None
-    for r in rows:
-        if r["root_hash"] != root:
-            root = r["root_hash"]
-            print(f"\nroot {root}")
-        pad = "  " * (r["depth_level"] + 1)
-        delta = "" if r["delta_wp"] is None else f"  -{r['delta_wp']:.1f}pts"
-        print(f"{pad}L{r['depth_level']}  {r['opp_move']} -> "
-              f"{r['my_move'] or '(shown)'}  {r['verdict']}{delta}  x{r['n']}")
-    return 0
-
-
-def cmd_leaks(args) -> int:
-    conn = db.init()
-    pool = None
-    data = drills.leaks(conn, pool, limit=args.limit)
-    if not data["positions"]:
-        print("No leaks yet: nothing has been answered wrong.")
-    else:
-        print("Which move do I keep getting wrong\n")
-        for p in data["positions"]:
-            print(f"  {p['score']:5.2f}  {p['misses']}/{p['attempts']}  "
-                  f"{(p['name'] or '?')[:24]:24s}  you play {p['you_play'] or '-'}"
-                  f"  refuted by {p['refuted_by'] or '-'}")
-    print("\nHow deep does it start\n")
-    for d in data["by_depth"]:
-        print(f"  level {d['depth_level']}  {d['attempts']:4d} answers  "
-              f"{d['accuracy'] or 0}% best")
-    if data["by_group"]:
-        print("\nBy group\n")
-        for g in data["by_group"]:
-            print(f"  {(g['name'] or '?')[:28]:28s} {g['phase'][:10]:10s}"
-                  f" {g['attempts']:4d} answers  {g['accuracy'] or 0}% best")
+          f" endgame {counts['endgame']}  (from {counts['games']} game(s))")
     return 0
 
 
@@ -481,59 +449,75 @@ def cmd_doctor(args) -> int:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="./run", add_help=True)
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    parser = argparse.ArgumentParser(
+        prog="./run",
+        description="Chess Trainer. A gym built from your own games.",
+        epilog="Commands that take time confirm before starting; --yes skips"
+               " the question. Everything that only reads never prompts.",
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True, metavar="command")
 
-    p = sub.add_parser("web")
+    p = sub.add_parser("web", help="start the app on 127.0.0.1:8770")
     p.add_argument("--host", default=app.HOST)
     p.add_argument("--port", type=int, default=app.PORT)
     p.set_defaults(func=cmd_web)
 
-    p = sub.add_parser("import")
+    p = sub.add_parser(
+        "import", help="import games: a PGN file, a chess.com link, or a player",
+        description="Import games. Give a PGN file or a chess.com game link, or"
+                    " use --player to fetch a chess.com player's whole history.")
     p.add_argument("source", nargs="?",
                    help="a PGN file, a chess.com game link, or an archive URL")
     p.add_argument("--player", metavar="USERNAME",
-                   help="import a chess.com player's whole history")
+                   help="fetch every game of this chess.com user; re-running"
+                        " picks up only what is new")
     p.add_argument("--time-class", default="rapid",
-                   help="rapid (default), blitz, bullet, daily, a comma-"
-                        "separated list, or all. --player only.")
+                   help="with --player: rapid (default), blitz, bullet, daily,"
+                        " a comma-separated list, or all")
     p.add_argument("--since", metavar="YYYY-MM",
-                   help="skip months before this one. --player only.")
+                   help="with --player: skip months before this one")
     p.set_defaults(func=cmd_import)
 
-    p = sub.add_parser("whoami")
-    p.add_argument("username", nargs="?")
-    p.set_defaults(func=cmd_whoami)
-
-    p = sub.add_parser("phases")
-    p.add_argument("--build", action="store_true")
-    p.add_argument("--rebuild", action="store_true",
-                   help="with --build: start the pools over")
-    p.add_argument("--yes", action="store_true")
-    p.set_defaults(func=cmd_phases)
-
-    p = sub.add_parser("tree")
-    p.set_defaults(func=cmd_tree)
-
-    p = sub.add_parser("leaks")
-    p.add_argument("--limit", type=int, default=20)
-    p.set_defaults(func=cmd_leaks)
-
-    p = sub.add_parser("warm")
-    p.add_argument("--yes", action="store_true")
-    p.set_defaults(func=cmd_warm)
-
-    p = sub.add_parser("review")
-    p.add_argument("--depth", type=int, default=review.REVIEW_DEPTH)
-    p.add_argument("--limit", type=int, default=None,
-                   help="review at most this many games (newest first)")
+    p = sub.add_parser(
+        "review", help="engine-review your games; feeds statistics and pools",
+        description="Engine-review your games, newest first. Every move is"
+                    " graded and tagged, and each reviewed game's positions"
+                    " join the drill pools. Resumable: reviewed games are"
+                    " skipped, so run it again after each import.")
+    p.add_argument("--depth", type=int, default=review.REVIEW_DEPTH,
+                   help=f"depth floor per position (default {review.REVIEW_DEPTH});"
+                        " simple positions go much deeper within --budget")
     p.add_argument("--budget", type=float, default=review.BUDGET,
-                   help="seconds of extra search per position beyond --depth;"
-                        " simple positions use it to go much deeper")
-    p.add_argument("--yes", action="store_true")
+                   help=f"seconds of extra search per position (default {review.BUDGET})")
+    p.add_argument("--limit", type=int, metavar="N",
+                   help="review at most N games this run")
+    p.add_argument("--yes", action="store_true", help="skip the confirmation")
     p.set_defaults(func=cmd_review)
 
-    p = sub.add_parser("doctor")
+    p = sub.add_parser(
+        "phases", help="list the drill pools, or --build to add games to them",
+        description="Without flags, list the pooled positions. --build adds"
+                    " games not yet pooled: reviewed ones instantly, the rest"
+                    " with the engine. --rebuild starts over.")
+    p.add_argument("--build", action="store_true", help="add unpooled games")
+    p.add_argument("--rebuild", action="store_true",
+                   help="delete the pools and build them again from every game")
+    p.add_argument("--yes", action="store_true", help="skip the confirmation")
+    p.set_defaults(func=cmd_phases)
+
+    p = sub.add_parser(
+        "warm", help="pre-analyse pooled positions so drills never wait",
+        description="Analyse every pooled position that is not yet cached, at"
+                    " the depths the drills use. Long-running and interruptible.")
+    p.add_argument("--yes", action="store_true", help="skip the confirmation")
+    p.set_defaults(func=cmd_warm)
+
+    p = sub.add_parser("whoami", help="show or set which chess.com name is you")
+    p.add_argument("username", nargs="?",
+                   help="set it and re-tag stored games; omit to show")
+    p.set_defaults(func=cmd_whoami)
+
+    p = sub.add_parser("doctor", help="check the engine, database, venv and port")
     p.set_defaults(func=cmd_doctor)
 
     args = parser.parse_args(argv)
