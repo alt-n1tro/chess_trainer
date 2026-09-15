@@ -60,6 +60,34 @@ position · `T` statistics · `G` games played · `W` engines warming on/off ·
 `Esc` close or leave set-up · `Ctrl+Z` undo while setting up ·
 `←` `→` step a move in a game · `Home`/`End` jump.
 
+## Why the move is the move
+
+Every verdict comes with an explanation of the engine's move, whether you
+found it or not, and all of it is read off the board rather than asserted.
+Exchanges are counted through to the end with a static exchange evaluation,
+forced replies are counted by listing the legal ones, and a claim is only
+made when the position can be checked for it.
+
+What it will tell you, when it is true:
+
+- **The tactic**, named with its pieces: what forks what, what is pinned to
+  what, what is simply undefended, and what cannot be taken back.
+- **Sacrifices**, as a decision rather than an accident: what the exchange
+  costs on that square, and what the line gets back for it.
+- **Checks**, by what they take away: the right to castle, the time to
+  defend, or the number of legal answers left.
+- **Prophylaxis** — the move you are stopping before it happens. "h3 takes a
+  square away: without it they had Bg4, and from there the bishop would have
+  pinned the knight on f3 to the queen."
+- **The forced part of the line**: which replies are the only legal ones,
+  which recaptures cannot be declined, and which move in the line actually
+  wins the material, with the reason it cannot be held.
+- **Quiet moves**, by what they buy: the seventh rank, an open file, a square
+  no pawn can chase a knight off, the opposition in a pawn ending, or a piece
+  that goes from three squares to eight.
+- **The runner-up**, quantified: the engine's second choice, how far behind it
+  is in win probability, and what happens in its line.
+
 ## The panel
 
 The right-hand column always reads the same way, top to bottom: which game

@@ -419,12 +419,23 @@ function renderVerdict(d) {
           ? ` · ${a.wp_best.toFixed(0)}% vs ${(a.wp_mine ?? 0).toFixed(0)}%` : "") +
         `</div>`
       : "") +
-    (ex.text ? `<div class="explain">${esc(ex.text)}</div>` : "") +
+    explainHtml(ex) +
     (d.done ? `<div class="lines">${pvRow("Yours", ex.my_pv, "mine")}` +
               `${pvRow("Best", ex.best_pv, "best")}</div>` : "") +
     `</div>` +
     (d.done ? "" : `<div class="ask">Keep going: find move ${d.step} of ` +
       `${d.chain}.</div>`);
+}
+
+/** The reasoning, a sentence to a line: what the move does, what the line
+    forces, what it stops, and what the move most people would play costs. */
+function explainHtml(ex) {
+  const items = (ex.items || []).slice(0, 4);
+  if (!items.length) {
+    return ex.text ? `<div class="explain"><p>${esc(ex.text)}</p></div>` : "";
+  }
+  return `<div class="explain">` + items.map((i) =>
+    `<p class="${esc(i.kind || "")}">${esc(i.text)}</p>`).join("") + `</div>`;
 }
 
 function pvRow(label, pv, kind) {

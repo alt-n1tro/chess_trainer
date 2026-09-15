@@ -216,6 +216,26 @@ def groups(conn, mode: str) -> list[dict]:
 TONE_ORDER = ["blunder", "shown", "mistake", "inaccuracy", "good", "best"]
 
 
+def _alternatives(lines: list[dict], played: str | None) -> list[dict]:
+    """The move most people would play instead, with how much the engine
+    thinks it costs. The runner-up is the interesting one: it is the move you
+    had to reject, and knowing why is most of the lesson. Your own move is
+    skipped here -- it is compared against the best move elsewhere."""
+    if len(lines) < 2:
+        return []
+    top = lines[0].get("wp")
+    out = []
+    for line in lines[1:3]:
+        if line.get("move") == played:
+            continue
+        gap = None
+        if top is not None and line.get("wp") is not None:
+            gap = round(top - line["wp"], 1)
+        out.append({"move": line["move"], "pv": line.get("pv") or [],
+                    "gap": gap})
+    return out
+
+
 def _worst(tones: list[str]) -> str | None:
     """The tone a whole chain of answers deserves."""
     present = [t for t in tones if t in TONE_ORDER]
@@ -574,7 +594,8 @@ class Drill:
         exp = explain_mod.explain(
             rs["fen"], move.uci(), best_move.uci(),
             {"mine": [move.uci()] + (mine.get("pv") or []),
-             "best": [best_move.uci()] + (best_eval.get("pv") or [])},
+             "best": [best_move.uci()] + (best_eval.get("pv") or []),
+             "alts": _alternatives(lines, move.uci())},
         )
 
         my_node = tree_touch(self.conn, self.root_hash, rs["node_id"],
@@ -665,7 +686,8 @@ class Drill:
             "fen_after": after.fen(),
             "explanation": explain_mod.explain(
                 rs["fen"], None, best["move"],
-                {"mine": [], "best": [move.uci()] + (best_eval.get("pv") or [])},
+                {"mine": [], "best": [move.uci()] + (best_eval.get("pv") or []),
+                 "alts": _alternatives(self.my_lines(), None)},
             ).to_json(),
         }
         # The move you were shown is played, so a chain carries on from it.

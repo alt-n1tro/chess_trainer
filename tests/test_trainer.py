@@ -5,6 +5,7 @@ Run with ./run test
 from __future__ import annotations
 
 import os
+import re
 import sys
 import unittest
 
@@ -319,6 +320,78 @@ class OneGameOnly(unittest.TestCase):
         conn = self._db()
         self.assertIsNone(drills.pick_random(conn, "endgame", game_id=1))
         self.assertIsNotNone(drills.pick_random(conn, "endgame", game_id=2))
+
+
+class WhyTheMoveWorks(unittest.TestCase):
+    """The explanation has to say something true about the position. Every
+    claim below is one the board can be checked against."""
+
+    def items(self, fen, pv, alts=None):
+        payload = {"mine": [], "best": pv}
+        if alts:
+            payload["alts"] = alts
+        return explain.explain(fen, None, pv[0], payload).items
+
+    def text(self, fen, pv, alts=None):
+        return " ".join(i["text"] for i in self.items(fen, pv, alts))
+
+    def test_static_exchange_counts_the_whole_swap(self):
+        free = chess.Board("4k3/8/8/3n4/8/8/8/3QK3 w - - 0 1")
+        self.assertEqual(explain.see(free, chess.Move.from_uci("d1d5")), 3)
+        defended = chess.Board("4k3/8/2p5/3n4/8/8/8/3QK3 w - - 0 1")
+        self.assertEqual(explain.see(defended, chess.Move.from_uci("d1d5")), -6)
+
+    def test_a_free_piece_is_named_as_free(self):
+        said = self.text("4k3/8/8/3n4/8/8/8/3QK3 w - - 0 1", ["d1d5", "e8e7"])
+        self.assertIn("nothing", said.lower())
+        self.assertIn("knight", said)
+
+    def test_mate_is_said_first_and_alone(self):
+        items = self.items(
+            "rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq g3 0 2",
+            ["d8h4"])
+        self.assertEqual(len(items), 1)
+        self.assertIn("mate", items[0]["text"].lower())
+
+    def test_it_names_the_threat_it_stops(self):
+        # Black threatens Qxf2 mate; g3 does not stop it, Qe2 does not either,
+        # so use a plain material threat: the knight on e5 hangs to nothing.
+        fen = "rnbqkb1r/pppp1ppp/5n2/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 3"
+        said = self.text(fen, ["f3e5", "f6e4"])
+        self.assertIn("e5", said)
+
+    def test_prophylaxis_names_the_move_it_prevents(self):
+        fen = "rnbqkbnr/ppp2ppp/3p4/4p3/4P3/3P1N2/PPP2PPP/RNBQKB1R w KQkq - 0 4"
+        said = self.text(fen, ["h2h3", "g8f6", "b1c3"])
+        self.assertIn("Bg4", said)
+        self.assertIn("pinned", said)
+
+    def test_the_seventh_rank_is_explained_not_just_named(self):
+        said = self.text("r4rk1/pp3ppp/8/8/8/8/PP3PPP/2R1R1K1 w - - 0 1",
+                         ["c1c7", "f8e8"])
+        self.assertIn("seventh", said)
+
+    def test_the_runner_up_is_quantified(self):
+        fen = "r1bq1rk1/ppp2ppp/2n5/2bpp3/4P3/2PP1N2/PP3PPP/RNBQ1RK1 w - - 0 8"
+        said = self.text(fen, ["d3d4", "e5d4", "c3d4"],
+                         alts=[{"move": "e4d5", "pv": ["e4d5", "d8d5"], "gap": 12.0}])
+        self.assertIn("exd5", said)
+        self.assertIn("12", said)
+
+    def test_nothing_is_claimed_when_nothing_is_there(self):
+        """A quiet move gets a plan, not an invented tactic."""
+        fen = "rnbqkbnr/ppp2ppp/3p4/4p3/4P3/3P1N2/PPP2PPP/RNBQKB1R w KQkq - 0 4"
+        said = self.text(fen, ["a2a3", "g8f6", "b1c3"])
+        self.assertIn("plan", said.lower())
+        words = re.findall(r"[a-z]+", said.lower())
+        for word in ("forks", "pins", "mate", "wins"):
+            self.assertNotIn(word, words)
+
+    def test_every_sentence_is_a_sentence(self):
+        fen = "r4rk1/pp3ppp/8/8/8/8/PP3PPP/2R1R1K1 w - - 0 1"
+        for item in self.items(fen, ["c1c7", "f8e8", "e1e8"]):
+            self.assertTrue(item["text"].endswith("."), item["text"])
+            self.assertGreater(len(item["text"].split()), 5, item["text"])
 
 
 class MateFlip(unittest.TestCase):

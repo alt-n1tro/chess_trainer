@@ -24,6 +24,7 @@
   --line: #333845;
   --text: #e9ecf1;
   --dim: #98a0ad;
+  --soft: #c2c9d4;          /* supporting sentences: quieter than the point */
   --accent: #6f9ee8;
   --tint: rgba(111, 158, 232, .14);
 
@@ -320,7 +321,14 @@ body[data-editing] #tree-box { display: none; }
 .card .label { font-weight: 650; color: var(--tone); font-size: 17px; }
 .card .cost { color: var(--dim); font-size: 13px; margin-left: auto; }
 .card .detail { color: var(--dim); font-size: 13px; margin-top: 2px; }
-.card .explain { margin-top: 9px; font-size: 14px; line-height: 1.5; }
+.card .explain { margin-top: 9px; font-size: 14px; line-height: 1.55; }
+.card .explain p { margin: 0 0 7px; }
+.card .explain p:last-child { margin-bottom: 0; }
+/* The first sentence is the point; the rest support it. */
+.card .explain p.line, .card .explain p.stops { color: var(--soft); }
+.card .explain p.alt {
+  color: var(--dim); border-top: 1px solid var(--line); padding-top: 7px;
+}
 .card .lines { margin-top: 11px; display: grid; gap: 6px; }
 .pv { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 13px; }
 .pv .tag {
