@@ -394,6 +394,82 @@ class WhyTheMoveWorks(unittest.TestCase):
             self.assertGreater(len(item["text"].split()), 5, item["text"])
 
 
+class ClaimsMatchTheBoard(unittest.TestCase):
+    """Every sentence carries the position it is about and the facts it rests
+    on, and the facts are re-derived from that position here. A sentence that
+    cannot be checked is a sentence that can be wrong."""
+
+    def claims(self, fen, pv, alts=None):
+        payload = {"mine": [], "best": pv}
+        if alts:
+            payload["alts"] = alts
+        return explain.explain(fen, None, pv[0], payload).items
+
+    def test_a_pin_names_the_piece_it_is_really_against(self):
+        """The bug this exists for: a pin against a rook reported as a pin
+        against the queen, because the ray was filtered by distance instead
+        of walked outwards."""
+        fen = "3qkbnr/ppp2ppp/8/3n4/8/8/PPP2PPP/3RKBNR w Kk - 0 1"
+        claims = self.claims(fen, ["d1d2", "e8e7"])
+        pin = next(c for c in claims if c["kind"] == "pin")
+        self.assertEqual(pin["facts"]["front_square"], "d5")
+        self.assertEqual(pin["facts"]["behind"], "queen")
+        self.assertEqual(pin["facts"]["behind_square"], "d8")
+        self.assertIn("queen on d8", pin["text"])
+        self.assertEqual(explain.verify(claims), [])
+
+    def test_the_piece_behind_is_the_one_behind_the_target(self):
+        board = chess.Board("3rk3/8/8/3n4/8/8/8/3RK3 w - - 0 1")
+        pin = explain._line_pin(board, chess.D1, chess.WHITE)
+        self.assertEqual(pin["front_square"], "d5")
+        self.assertEqual(pin["behind"], "rook")
+        self.assertEqual(pin["behind_square"], "d8")
+
+    def test_nothing_is_called_a_fork_when_one_move_answers_it(self):
+        """A fork they can meet is not a fork, and saying so is worse than
+        saying nothing."""
+        board = chess.Board("4k3/8/8/8/8/8/4P3/4K3 w - - 0 1")
+        self.assertTrue(explain._they_can_save(board, ["e8"], chess.WHITE))
+
+    def test_a_claim_about_the_position_after_the_move_says_so(self):
+        fen = "3qkbnr/ppp2ppp/8/3n4/8/8/PPP2PPP/3RKBNR w Kk - 0 1"
+        pin = next(c for c in self.claims(fen, ["d1d2", "e8e7"])
+                   if c["kind"] == "pin")
+        self.assertTrue(pin["text"].startswith("After Rd2"), pin["text"])
+        self.assertEqual(chess.Board(pin["fen"]).piece_at(chess.D2),
+                         chess.Piece(chess.ROOK, chess.WHITE))
+
+    def test_the_purpose_looks_down_the_line_not_at_the_move(self):
+        """Bxc6 is played for Nxe5 two moves later, and the reason is that
+        the knight on c6 is what holds e5."""
+        fen = "r1bqk2r/pppp1ppp/2n2n2/1Bb1p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1"
+        claims = self.claims(fen, ["b5c6", "d7c6", "f3e5"])
+        purpose = next(c for c in claims if c["kind"] == "purpose")
+        self.assertEqual(purpose["facts"]["payoff_san"], "Nxe5")
+        self.assertEqual(purpose["facts"]["why"], "removes the guard")
+        self.assertIn("holding e5", purpose["text"])
+        self.assertEqual(explain.verify(claims), [])
+
+    def test_every_claim_verifies_on_a_spread_of_positions(self):
+        cases = [
+            ("r4rk1/pp3ppp/8/8/8/8/PP3PPP/2R1R1K1 w - - 0 1", ["c1c7", "f8e8", "e1e8"]),
+            ("4k3/8/8/3n4/8/8/8/3QK3 w - - 0 1", ["d1d5", "e8e7"]),
+            ("r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 4 4",
+             ["f3g5", "d7d5", "e4d5"]),
+            ("rnbqkbnr/ppp2ppp/3p4/4p3/4P3/3P1N2/PPP2PPP/RNBQKB1R w KQkq - 0 4",
+             ["h2h3", "g8f6", "b1c3"]),
+            ("8/8/3k4/8/3K4/8/4P3/8 w - - 0 1", ["e2e4", "d6e6", "d4e4"]),
+            ("r1bq1rk1/ppp2ppp/2n5/2bpp3/4P3/2PP1N2/PP3PPP/RNBQ1RK1 w - - 0 8",
+             ["d3d4", "e5d4", "c3d4"]),
+        ]
+        for fen, pv in cases:
+            claims = self.claims(fen, pv)
+            self.assertEqual(explain.verify(claims), [], f"{fen} {pv[0]}")
+            for claim in claims:
+                self.assertTrue(claim["text"].rstrip().endswith("."), claim["text"])
+                self.assertIn("fen", claim)
+
+
 class MateFlip(unittest.TestCase):
     """A side being mated sits at 0.0 win probability. Zero is falsy, and
     the flip once read it as 'no evaluation' and handed back 50%: a forced

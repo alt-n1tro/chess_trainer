@@ -474,7 +474,9 @@ def _line_pin(board: chess.Board, square: int, me: bool):
                 kind = "skewers"
             if kind:
                 entry = {
-                    "kind": kind,
+                    # Not "kind": that is the claim's own field, and a fact
+                    # named the same shadows it.
+                    "pin_kind": kind,
                     "attacker": chess.square_name(square),
                     "attacker_piece": NAMES[piece.piece_type],
                     "front": NAMES[front.piece_type],
@@ -491,7 +493,7 @@ def _line_pin(board: chess.Board, square: int, me: bool):
 def _pin_phrase(pin: dict) -> str:
     behind = ("the king on " + pin["behind_square"] if pin["behind"] == "king"
               else f"the {pin['behind']} on {pin['behind_square']}")
-    return (f"{pin['kind']} the {pin['front']} on {pin['front_square']} against"
+    return (f"{pin['pin_kind']} the {pin['front']} on {pin['front_square']} against"
             f" {behind}")
 
 
@@ -551,6 +553,35 @@ def _targets_of(board: chess.Board, square: int, me: bool) -> list[dict]:
             out.append({"piece": NAMES[victim.piece_type],
                         "square": chess.square_name(target), "gain": gain})
     return out
+
+
+def _still_winnable(board: chess.Board, square_name: str, me: bool) -> bool:
+    """With `me` to move on this board, is the man on that square still there
+    and still winnable by force of exchange?"""
+    square = chess.parse_square(square_name)
+    victim = board.piece_at(square)
+    if victim is None or victim.color == me:
+        return False
+    if victim.piece_type == chess.KING:
+        return board.is_check()
+    probe = board.copy(stack=False)
+    probe.turn = me
+    probe.ep_square = None
+    grab = cheapest_capture(probe, square)
+    return grab is not None and see(probe, grab) > 0
+
+
+def _they_can_save(after: chess.Board, squares: list[str], me: bool) -> bool:
+    """Is there one reply of theirs that makes every one of these safe? If
+    there is, the fork is not a fork and the attack is not an attack -- and
+    saying otherwise is the kind of confident nonsense that makes the whole
+    explanation worthless."""
+    for reply in after.legal_moves:
+        probe = after.copy(stack=False)
+        probe.push(reply)
+        if not any(_still_winnable(probe, sq, me) for sq in squares):
+            return True
+    return False
 
 
 def _open_file(board: chess.Board, square: int, me: bool) -> bool:
@@ -775,7 +806,8 @@ def _claim_tactic(root, move, san, after, me, where, name,
             if t["piece"] != "king"]
     pin = _line_pin(after, move.to_square, me)
     checking = after.is_check()
-    if len(hits) >= 2:
+    if len(hits) >= 2 and not _they_can_save(
+            after, [hits[0]["square"], hits[1]["square"]], me):
         return _claim(
             "fork",
             f"{_after_move(san)} the {name} on {where} attacks both the"
@@ -784,7 +816,7 @@ def _claim_tactic(root, move, san, after, me, where, name,
             f" of them and not the other, and that is the whole point of the"
             f" square.",
             after, square=where, targets=hits[:2])
-    if checking and hits:
+    if checking and hits and not _they_can_save(after, [hits[0]["square"]], me):
         return _claim(
             "double",
             f"{san} checks the king and, in the same move, attacks the"
@@ -799,17 +831,21 @@ def _claim_tactic(root, move, san, after, me, where, name,
                        f"cannot move without losing {behind}")
         return _claim(
             "pin",
-            f"{_after_move(san)} the {name} on {where} {pin['kind']} the"
+            f"{_after_move(san)} the {name} on {where} {pin['pin_kind']} the"
             f" {pin['front']} on {pin['front_square']} against {behind}: the"
             f" {pin['front']} {consequence}.",
             after, **pin)
     if hits and include_attack:
+        held = not _they_can_save(after, [hits[0]["square"]], me)
+        if not held:
+            return None        # they answer it in one move: not worth saying
         return _claim(
             "attack",
             f"{_after_move(san)} the {name} on {where} attacks the"
-            f" {hits[0]['piece']} on {hits[0]['square']}, and counting the"
-            f" exchange there says it cannot simply be defended.",
-            after, square=where, targets=hits[:1])
+            f" {hits[0]['piece']} on {hits[0]['square']}, and they have no"
+            f" single move that saves it: defending it is not enough, and"
+            f" moving it away costs them something else.",
+            after, square=where, targets=hits[:1], unanswerable=True)
     if checking:
         rights = (root.has_castling_rights(not me)
                   and not after.has_castling_rights(not me))
@@ -897,7 +933,7 @@ def _claim_prevented(root, move, san, after, me):
         pin = stop["pin"]
         behind = ("your king" if pin["behind"] == "king"
                   else f"your {pin['behind']} on {pin['behind_square']}")
-        would = (f"{pin['kind'][:-1]}ned your {pin['front']} on"
+        would = (f"{pin['pin_kind'][:-1]}ned your {pin['front']} on"
                  f" {pin['front_square']} against {behind}")
     else:
         would = f"attacked your {stop['hits'][0]['piece']} on {stop['hits'][0]['square']}"
@@ -1217,6 +1253,17 @@ def _claim_purpose(root: chess.Board, move: chess.Move, san: str,
         return None
     moves_away = (payoff["ply"] + 2) // 2
     story = _guard_story(root, move, after, payoff, steps, me)
+    swing = payoff["swing"] or 0
+    strong = story and story["why"] in ("removes the guard", "deflects the guard",
+                                        "brings the piece")
+    if not payoff["mate"]:
+        # "The point is that they walk a pawn onto a square four moves from
+        # now" is not the point of anything. A purpose is worth stating when
+        # this move made the payoff possible, or when the payoff is big.
+        if not strong and swing < 2:
+            return None
+        if story and story["why"] == "walks in" and swing < 3:
+            return None
     count = _spell(moves_away)
     if payoff["mate"]:
         head = (f"The point of {san} is mate {count} move"
@@ -1395,6 +1442,11 @@ def verify_claim(claim: dict) -> list[str]:
 
     kind = claim["kind"]
     if kind in ("fork", "double", "attack"):
+        squares = [t["square"] for t in facts.get("targets", [])]
+        mover = board.piece_at(chess.parse_square(facts["square"])) if facts.get("square") else None
+        if squares and mover is not None and _they_can_save(board, squares, mover.color):
+            problems.append(f"{kind}: one reply of theirs saves everything the"
+                            f" claim says is hanging")
         square = chess.parse_square(facts["square"])
         attacker = board.piece_at(square)
         if attacker is None:
@@ -1431,7 +1483,7 @@ def verify_claim(claim: dict) -> list[str]:
             problems.append("pin: the front piece is our own")
         if f_piece and b_piece and f_piece.color != b_piece.color:
             problems.append("pin: the two pinned pieces are not the same side")
-        if f_piece and b_piece and facts["kind"] == "pins" \
+        if f_piece and b_piece and facts.get("pin_kind") == "pins" \
                 and b_piece.piece_type != chess.KING \
                 and VALUES[b_piece.piece_type] <= VALUES[f_piece.piece_type]:
             problems.append("pin: what is behind is not worth more")
