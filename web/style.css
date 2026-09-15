@@ -231,9 +231,36 @@ body[data-turn="black"] .turn-dot { background: #22242a; }
   border-radius: var(--r); padding: 16px; display: grid; gap: 14px;
   position: sticky; top: 22px;
 }
-#pick { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
-body[data-mode]:not([data-mode="openings"]) #pick { grid-template-columns: 1fr; }
-body[data-mode]:not([data-mode="openings"]) #btn-openings { display: none; }
+/* the panel's own section labels, and the tools that stay folded away */
+.sec-row {
+  font-size: 11px; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--dim); margin: 14px 0 7px;
+}
+#actions .sec-row:first-child { margin-top: 0; }
+#actions .row + .row { margin-top: 7px; }
+#actions .row button.wide { flex: 1; }
+details.more { margin-top: 12px; }
+details.more > summary {
+  cursor: pointer; color: var(--dim); font-size: 12px; list-style: none;
+  padding: 3px 0; user-select: none;
+}
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::before { content: "▸ "; }
+details.more[open] > summary::before { content: "▾ "; }
+details.more > summary:hover { color: var(--fg); }
+details.more .row { margin-top: 6px; }
+/* Setting up a position is its own screen: the drill's controls step aside. */
+body[data-editing] #progress,
+body[data-editing] #verdict,
+body[data-editing] #actions,
+body[data-editing] #tree-box { display: none; }
+#editor .palette button.erase {
+  display: grid; place-items: center; font-size: 15px; color: var(--dim);
+}
+#editor .palette button.erase.on { color: var(--fg); }
+#editor .sec-row { margin-top: 0; }
+#editor .row { display: flex; gap: 8px; margin-top: 9px; }
+#editor .row button { flex: 1; min-width: 0; }
 
 #context .players { color: var(--dim); font-size: 13px; }
 #context .players .you { color: var(--text); font-weight: 600; }
@@ -371,12 +398,19 @@ kbd {
 #editor { display: grid; gap: 10px; border-top: 1px solid var(--line);
   padding-top: 12px; }
 #editor .hint { color: var(--dim); font-size: 13px; }
-#editor .palette { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
+/* Thirteen tiles: the eraser, then six white and six black. Seven to a row
+   keeps each colour on its own line and nothing off the edge. */
+/* minmax(0, ...) or each tile keeps its own minimum width and the whole
+   palette pushes the panel wider than the column it lives in. */
+#editor .palette {
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px;
+}
 #editor .palette button {
   padding: 4px; background: #cdd2d9; border-color: transparent; aspect-ratio: 1;
   display: grid; place-items: center;
 }
 #editor .palette button.on { outline: 2px solid var(--accent); }
+#editor .palette .gap { grid-column: span 1; }
 #editor .palette svg { width: 100%; height: auto; }
 #editor .opts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 #editor .opts button { padding: 6px 10px; font-size: 13px; }

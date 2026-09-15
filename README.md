@@ -57,7 +57,27 @@ is reviewed.
 position · `T` statistics · `G` games played · `W` engines warming on/off ·
 `O`/`B` menu · `M` cycle mode · `E` set up a position · `S` save ·
 `Backspace` back · `R` reset and replay this position · `?`/`H` help ·
-`Esc` close · `←` `→` step a move in a game · `Home`/`End` jump.
+`Esc` close or leave set-up · `Ctrl+Z` undo while setting up ·
+`←` `→` step a move in a game · `Home`/`End` jump.
+
+## The panel
+
+The right-hand column always reads the same way, top to bottom: which game
+and position you are looking at, how far through it you are, the verdict on
+your last move, then what you can do. The actions come in labelled groups —
+**This position** (one primary button: find the move, or move on), **Another
+position**, and a folded **Tools** for saving and hand-setting. A button that
+cannot do anything here is not drawn: no disabled row to puzzle over.
+
+## Setting up a position
+
+`E`, or *Tools → Set up a position*. You start with nothing in hand, so a
+click never drops a piece you did not ask for. Take a piece from the palette
+and click squares to place it; click that piece again, or the `✕` tile, to put
+it down. Clicking an occupied square clears it. **Undo** (or `Ctrl+Z`) walks
+back every change, including *Clear the board*. While you are setting up, the
+drill's own buttons step aside so nothing is ambiguous; *Leave set-up* or
+`Esc` brings them back.
 
 ## One game at a time
 

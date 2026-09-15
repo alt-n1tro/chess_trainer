@@ -20,7 +20,7 @@ const el = {
   context: $("context"), progress: $("progress"), verdict: $("verdict"),
   actions: $("actions"), tree: $("tree"), treeBox: $("tree-box"),
   menu: $("menu"), help: $("help"), editor: $("editor"), toast: $("toast"),
-  modeBtn: $("btn-mode"), modeList: $("mode-list"), pick: $("pick"),
+  modeBtn: $("btn-mode"), modeList: $("mode-list"),
   chainBtn: $("btn-chain"), chainList: $("chain-list"),
   cards: $("cards"), library: $("library"), warmBtn: $("btn-warming"),
 };
@@ -119,6 +119,9 @@ async function apply(data) {
   ).join("");
   renderWarming(data.warming !== false);
   renderCards(data);
+  // A state arriving while you are setting up (a finished analysis, say) must
+  // not redraw the board you are building.
+  if (editor.open) return;
   if (data.game) await renderGame(data.game);
   else await renderDrill(data.drill);
 }
@@ -235,8 +238,10 @@ async function renderDrill(d) {
       `<div class="tail">./run import --player &lt;name&gt;<br>./run review</div>`;
     el.progress.innerHTML = "";
     el.verdict.innerHTML = "";
-    el.actions.innerHTML = rowOf([btnHtml("menu", "Open the menu"),
-                                  btnHtml("editor", "Set up a position")]);
+    el.actions.innerHTML =
+      rowOf([btnHtml("library", "Games played", false, "primary")]) +
+      rowOf([btnHtml("menu", "Browse positions"),
+             btnHtml("editor", "Set up a position")], "small");
     el.tree.innerHTML = "";
     return;
   }
@@ -431,27 +436,58 @@ function pvRow(label, pv, kind) {
     `${esc(m.san)}</button>`).join("") + `</div>`;
 }
 
+/** The panel in three groups: what to do with this position, how to get
+    another, and the tools you reach for rarely. A button that cannot do
+    anything here is not drawn at all -- a disabled row reads as a puzzle. */
 function renderActions(d) {
-  const a = d.answer;
-  const rows = [];
+  const rows = [group("This position")];
   if (!d.done) {
-    rows.push(rowOf([btnHtml("show", "Show me the move", false,
-                             a ? "" : "primary")]));
+    rows.push(rowOf([btnHtml("show", "Show me the move", false, "primary")]));
   } else {
-    const next = d.has_next_round
-      ? "Next position" : `Drill another ${MODE_NOUN[d.mode]}`;
-    const main = [btnHtml("next", next, false, "primary")];
-    if (d.can_deeper) main.unshift(btnHtml("deeper", "Drill from here"));
-    rows.push(rowOf(main));
+    // With rounds left the same position asks the next opponent move; with
+    // none left this draws a fresh one, which is what "Random" does too, so
+    // only one of the two is ever offered.
+    const next = d.has_next_round ? "Next position" : "A new position";
+    rows.push(rowOf([btnHtml("next", next, false, "primary")]));
+    if (d.can_deeper) {
+      rows.push(rowOf([btnHtml("deeper", "Drill on from here",
+                               false, "wide")]));
+    }
   }
-  rows.push(rowOf([
-    btnHtml("back", "← Back", state.stack_depth <= 1 && !d.depth_level),
-    btnHtml("reset", "Replay"),
-    btnHtml("save", "Save"),
-    btnHtml("editor", "Set up"),
-  ], "small"));
+  const small = [btnHtml("reset", "Replay it")];
+  if (state.stack_depth > 1 || d.depth_level) {
+    small.push(btnHtml("back", "← Back a level"));
+  }
+  rows.push(rowOf(small, "small"));
+  rows.push(group("Another position"));
+  const another = [];
+  if (!d.done || d.has_next_round) {
+    another.push(btnHtml("random", `Random ${MODE_NOUN[d.mode]}`));
+  }
+  another.push(btnHtml("menu", "Browse…"));
+  rows.push(rowOf(another, "small"));
+  rows.push(tools());
   el.actions.innerHTML = rows.join("");
 }
+
+function group(label) {
+  return `<div class="sec-row">${esc(label)}</div>`;
+}
+
+/** Saving and hand-setting are occasional: reachable, never in the way. */
+let toolsOpen = false;
+function tools() {
+  return `<details class="more"${toolsOpen ? " open" : ""}>` +
+    `<summary>Tools</summary>` +
+    rowOf([btnHtml("save", "Save this position"),
+           btnHtml("editor", "Set up a position")], "small") + `</details>`;
+}
+
+document.addEventListener("toggle", (event) => {
+  if (event.target.classList && event.target.classList.contains("more")) {
+    toolsOpen = event.target.open;
+  }
+}, true);
 
 function rowOf(buttons, cls) {
   return `<div class="row ${cls || ""}">${buttons.join("")}</div>`;
@@ -588,11 +624,16 @@ async function renderGame(g) {
   const drillable = last && last.is_me && last.review_id && last.verdict !== "best"
     ? [`<button data-act="gdrill" data-id="${last.review_id}">Drill this moment</button>`] : [];
   el.actions.innerHTML =
-    rowOf([btnHtml("gplay", "Play from here", false, "primary"), ...drillable]) +
+    group("This moment") +
+    rowOf([btnHtml("gplay", "Play on from here", false, "primary")]) +
+    (drillable.length ? rowOf(drillable) : "") +
+    group("Move through the game") +
     rowOf([btnHtml("gstart", "⇤"), btnHtml("gprev", "←"),
            btnHtml("gnext", "→"), btnHtml("gend", "⇥"),
            btnHtml("gcolour", g.colour === "white" ? "As White" : "As Black")], "small") +
-    rowOf([btnHtml("gsetup", "Set up from here"), btnHtml("gclose", "Leave game")], "small");
+    rowOf([btnHtml("gclose", "← Leave this game")], "small") +
+    `<details class="more"${toolsOpen ? " open" : ""}><summary>Tools</summary>` +
+    rowOf([btnHtml("gsetup", "Set up from here")], "small") + `</details>`;
   el.tree.innerHTML = "";
   el.treeBox.hidden = true;
 }
@@ -777,6 +818,13 @@ async function openHelp() {
     ` plan and not just a move. Right-click the board to draw arrows and` +
     ` circles, as on chess.com; any left click on the board wipes them.` +
     ` Clicking a piece you have already picked up puts it down.</div>` +
+    `<div class="sec">Setting up a position</div>` +
+    `<div class="meta">Press <b>E</b>. Nothing is in hand to begin with, so a` +
+    ` click never drops a piece you did not ask for: take one from the` +
+    ` palette, click squares to place it, and click it again (or the ✕ tile)` +
+    ` to put it down. A click on an occupied square clears it, <b>Undo</b>` +
+    ` (Ctrl+Z) walks back every change, and <b>Leave set-up</b> or Esc` +
+    ` returns to the drill.</div>` +
     `<div class="sec">One game at a time</div>` +
     `<div class="meta"><b>Games played</b> lists everything in the database,` +
     ` searchable by name, Elo range and date. Analyse a chess.com link or a` +
@@ -785,7 +833,8 @@ async function openHelp() {
     ` card. <b>Engines warming</b>, top left, stops the background analysis` +
     ` at once when you would rather have the processor back.</div>` +
     `<div class="sec">Keys</div><table class="stats">` + [
-      ["Enter", "Next position"], ["O / B", "Menu"], ["G", "Games played"],
+      ["Enter", "Next position"], ["O / B", "Browse positions"],
+      ["G", "Games played"],
       ["W", "Engines warming on/off"], ["M", "Cycle mode"],
       ["E", "Set up a position"], ["S", "Save position"], ["Backspace", "Back"],
       ["R", "Replay this position"], ["D", "Drill from here"],
@@ -818,15 +867,44 @@ async function openHelp() {
       `<td>${d.accuracy === null ? 0 : d.accuracy}%</td></tr>`).join("") + `</table>`);
 }
 
-const editor = { pieces: {}, turn: "black", castling: "", hand: "P", open: false };
+const editor = { pieces: {}, turn: "black", castling: "", hand: null,
+                 open: false, history: [] };
 const PIECE_ORDER = ["K", "Q", "R", "B", "N", "P", "k", "q", "r", "b", "n", "p"];
+const PIECE_NAME = { k: "king", q: "queen", r: "rook", b: "bishop",
+                     n: "knight", p: "pawn" };
 
 function openEditor(fen) {
   editor.open = true;
   editor.pieces = {};
   editor.castling = "";
   editor.turn = "black";
+  // Nothing in hand to begin with, so a stray click cannot scatter pawns
+  // across the board. You pick a piece, then place it.
+  editor.hand = null;
+  editor.history = [];
   if (fen) seedFromFen(fen);
+  // The drill's own buttons would still be sitting there otherwise, doing
+  // something else entirely. While you are setting up, the panel is the
+  // set-up.
+  document.body.dataset.editing = "1";
+  drawEditor();
+}
+
+/** Remember the board before a change, so it can be taken back. */
+function editorRemember() {
+  editor.history.push(JSON.stringify({
+    pieces: editor.pieces, turn: editor.turn, castling: editor.castling,
+  }));
+  if (editor.history.length > 60) editor.history.shift();
+}
+
+function editorUndo() {
+  const last = editor.history.pop();
+  if (!last) return;
+  const was = JSON.parse(last);
+  editor.pieces = was.pieces;
+  editor.turn = was.turn;
+  editor.castling = was.castling;
   drawEditor();
 }
 
@@ -861,23 +939,39 @@ function editorFen() {
 
 async function drawEditor() {
   el.editor.hidden = false;
+  const holding = editor.hand
+    ? `Placing ${editor.hand === editor.hand.toUpperCase() ? "white" : "black"}` +
+      ` ${PIECE_NAME[editor.hand.toLowerCase()]}s — click a square. Click the` +
+      ` piece again to put it down.`
+    : `Nothing in hand: click a piece below to place it, or click a square` +
+      ` on the board to clear it.`;
   el.editor.innerHTML =
-    `<div class="hint">Click a square to place, click it again to clear. ` +
-    `<b>To move</b> is the side your <b>opponent</b> takes: to move ` +
-    `${editor.turn === "black" ? "Black means you play White" : "White means you play Black"}.` +
-    `</div><div class="palette">` + PIECE_ORDER.map((p) =>
+    `<div class="sec-row">Setting up a position</div>` +
+    `<div class="hint">${holding}</div>` +
+    `<div class="palette">` +
+    `<button data-act="hand" data-p="" class="erase ${editor.hand ? "" : "on"}"` +
+    ` title="Nothing in hand: clicks clear a square">✕</button>` +
+    PIECE_ORDER.map((p, i) =>
+      (i === 6 ? `<span class="gap"></span>` : "") +
       `<button data-act="hand" data-p="${p}" class="${editor.hand === p ? "on" : ""}">` +
       `<svg viewBox="0 0 40 40"><use href="vendor/cm-chessboard/assets/pieces/standard.svg#` +
       `${spriteName(p)}"></use></svg></button>`).join("") +
+    `</div><div class="hint"><b>To move</b> is the side your <b>opponent</b>` +
+    ` takes: to move ` +
+    `${editor.turn === "black" ? "Black means you play White" : "White means you play Black"}.` +
     `</div><div class="opts">` +
     `<button data-act="turn">To move: ${editor.turn === "black" ? "Black" : "White"}</button>` +
     ["K", "Q", "k", "q"].map((c) => `<button data-act="castle" data-c="${c}" ` +
       `class="${editor.castling.includes(c) ? "on" : ""}">${c}</button>`).join("") +
-    `</div><input id="ed-name" placeholder="Name (optional)">` +
-    `<div class="opts"><button data-act="ed-empty">Empty</button>` +
-    `<button data-act="ed-start">Start position</button>` +
-    `<button data-act="ed-cancel">Cancel</button>` +
-    `<button class="primary" data-act="ed-go">Drill this</button></div>`;
+    `</div><div class="opts">` +
+    `<button data-act="ed-undo"${editor.history.length ? "" : " disabled"}>` +
+    `↶ Undo</button>` +
+    `<button data-act="ed-empty">Clear the board</button>` +
+    `<button data-act="ed-start">Start position</button></div>` +
+    `<input id="ed-name" placeholder="Name (optional)">` +
+    `<div class="row"><button class="primary" data-act="ed-go">Drill this position</button></div>` +
+    `<div class="row small"><button data-act="ed-cancel">` +
+    `← Leave set-up</button></div>`;
   board.disableMoveInput();
   board.removeMarkers();
   board.removeArrows();
@@ -891,7 +985,10 @@ async function drawEditor() {
 
 function closeEditor() {
   editor.open = false;
+  editor.hand = null;
+  editor.history = [];
   el.editor.hidden = true;
+  delete document.body.dataset.editing;
   board.disableSquareSelect();
   shownFen = null;
   if (state) apply(state);
@@ -903,11 +1000,19 @@ async function editorGo() {
   // opened in the meantime.
   editor.open = false;
   el.editor.hidden = true;
+  delete document.body.dataset.editing;
   const data = await call("/api/editor/set", {
     pieces: editor.pieces, turn: editor.turn,
     castling: editor.castling || "-", name,
   });
-  if (!data) { editor.open = true; el.editor.hidden = false; }
+  if (!data) {              // refused: stay in the editor with the reason
+    editor.open = true;
+    el.editor.hidden = false;
+    document.body.dataset.editing = "1";
+  } else {
+    editor.hand = null;
+    editor.history = [];
+  }
 }
 
 function show(node, html) {
@@ -960,13 +1065,22 @@ function clearAnnotations() {
 /** Place or clear one square. The board is not rebuilt: a full redraw would
     drop any click that lands while it is running. */
 function editorClick(square) {
-  if (editor.pieces[square]) {
+  const had = editor.pieces[square];
+  // An empty square with nothing in hand is not a change, and must not eat
+  // an undo step.
+  if (!had && !editor.hand) return;
+  editorRemember();
+  if (had) {
     delete editor.pieces[square];
     board.setPiece(square, null);
   } else {
     editor.pieces[square] = editor.hand;
     board.setPiece(square, spriteName(editor.hand));
   }
+  // Only the Undo button's state changes, so the board is left alone: a full
+  // redraw here would drop a click that lands while it runs.
+  const undo = el.editor.querySelector('[data-act="ed-undo"]');
+  if (undo) undo.disabled = false;
 }
 
 /** "Q" -> "wq", "n" -> "bn": the board library's name for a piece. */
@@ -1102,17 +1216,26 @@ document.addEventListener("click", async (event) => {
     case "playout": closeOverlays(); shownKey = null;
       return void call("/api/drill/review", { id: Number(hit.dataset.id), play_out: true });
     case "pv": return walkPv(hit.dataset.kind, Number(hit.dataset.i));
-    case "hand": editor.hand = hit.dataset.p; return drawEditor();
-    case "turn": editor.turn = editor.turn === "black" ? "white" : "black";
+    case "hand": {
+      const want = hit.dataset.p || null;
+      // Clicking the piece you are holding puts it down again.
+      editor.hand = editor.hand === want ? null : want;
+      return drawEditor();
+    }
+    case "ed-undo": return editorUndo();
+    case "turn": editorRemember();
+      editor.turn = editor.turn === "black" ? "white" : "black";
       return drawEditor();
     case "castle": {
+      editorRemember();
       const c = hit.dataset.c;
       editor.castling = editor.castling.includes(c)
         ? editor.castling.replace(c, "") : editor.castling + c;
       return drawEditor();
     }
-    case "ed-empty": editor.pieces = {}; editor.castling = ""; return drawEditor();
-    case "ed-start":
+    case "ed-empty": editorRemember(); editor.pieces = {}; editor.castling = "";
+      return drawEditor();
+    case "ed-start": editorRemember();
       seedFromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
       editor.turn = "black"; return drawEditor();
     case "ed-cancel": return closeEditor();
@@ -1155,8 +1278,6 @@ document.addEventListener("click", async (event) => {
   }
 });
 
-$("btn-random").addEventListener("click", () => { shownKey = null; call("/api/random", {}); });
-$("btn-openings").addEventListener("click", openMenu);
 $("btn-help").addEventListener("click", openHelp);
 $("btn-library").addEventListener("click", openLibrary);
 el.warmBtn.addEventListener("click", () => {
@@ -1191,6 +1312,10 @@ document.addEventListener("keydown", (event) => {
     if (editor.open) { event.preventDefault(); return closeEditor(); }
     if (pvCursor) { event.preventDefault(); return void leavePv(); }
     return;
+  }
+  if (key.toLowerCase() === "z" && (event.ctrlKey || event.metaKey) && editor.open) {
+    event.preventDefault();
+    return editorUndo();
   }
   if (/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
   if (editor.open) return;
