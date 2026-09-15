@@ -889,6 +889,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(t.start_analysis(data.get("source") or "",
                                               data.get("game_id")))
 
+        if path == "/api/analyse/dismiss":
+            # The card is read; forget the finished job so it does not come
+            # back with the next page load. A running one is left alone.
+            if t.job is not None and not t.job.snapshot()["active"]:
+                t.job = None
+            return self.json(t.state())
+
         if path == "/api/analyse/status":
             job = t.job_state()
             return self.json({"job": job, "focus": t.focus_state(),

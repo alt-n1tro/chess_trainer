@@ -135,7 +135,7 @@ input:focus { outline: none; border-color: var(--accent); }
 #library .filters { display: grid; gap: 8px; margin-bottom: 10px; }
 #library .filters .line { display: flex; gap: 8px; flex-wrap: wrap; }
 #library input { flex: 1; min-width: 90px; }
-#library input.narrow { flex: 0 0 92px; }
+#library input.narrow { flex: 0 0 150px; }
 #library .glist { display: grid; gap: 4px; max-height: 52vh; overflow: auto; }
 .grow {
   display: grid; grid-template-columns: 1fr auto; gap: 8px 10px;

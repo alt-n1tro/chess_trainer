@@ -1136,12 +1136,14 @@ document.addEventListener("click", async (event) => {
       return void call("/api/drill/review", { id: Number(hit.dataset.id) });
     case "drill-game": closeOverlays(); shownKey = null;
       dismissedJob = state.job ? jobKey(state.job) : null;
+      call("/api/analyse/dismiss", {});
       return void call("/api/focus", { game_id: Number(hit.dataset.id), draw: true });
     case "unlock": shownKey = null;
       return void call("/api/focus", { game_id: null });
     case "job-dismiss":
       dismissedJob = state.job ? jobKey(state.job) : null;
-      return renderCards(state);
+      renderCards(state);
+      return void call("/api/analyse/dismiss", {});
     case "analyse": return startAnalysis();
     case "analyse-game":
       return void startAnalysis(null, Number(hit.dataset.id));
