@@ -149,8 +149,12 @@ def _recency_penalty(rank: int | None) -> float:
 
 
 def pick_random(conn, mode: str, name: str | None = None,
-                colour: str | None = None):
-    """Random does not pick uniformly. Positions you get wrong come back."""
+                colour: str | None = None, game_id: int | None = None):
+    """Random does not pick uniformly. Positions you get wrong come back.
+
+    With ``game_id`` the draw is locked to one game: every position offered
+    comes from that game, which is how you drill a single game you just had.
+    """
     phase = MODE_PHASE[mode]
     sql = "SELECT * FROM positions WHERE phase=?"
     args: list = [phase]
@@ -160,6 +164,9 @@ def pick_random(conn, mode: str, name: str | None = None,
     if colour:
         sql += " AND my_colour=?"
         args.append(colour)
+    if game_id:
+        sql += " AND source_game=?"
+        args.append(game_id)
     rows = conn.execute(sql, args).fetchall()
     if not rows:
         return None

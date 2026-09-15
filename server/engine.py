@@ -112,6 +112,15 @@ class Slot:
         except Exception:
             pass
 
+    def kill(self) -> None:
+        """Stop the process now, search and all. A UCI search cannot be
+        called off politely from another thread, and an idle switch that
+        waits ten seconds for a deep search is not an idle switch."""
+        try:
+            self.engine.close()
+        except Exception:
+            pass
+
 
 def _lines_from_info(board: chess.Board, infos, multipv: int) -> list[dict]:
     """Normalise python-chess info dicts into our cached line format.
@@ -164,8 +173,10 @@ def _rank_key(line: dict) -> float:
 class Pool:
     """Two slots: foreground and warmer, plus the analysis cache."""
 
-    def __init__(self, path: str = ENGINE_PATH, db_path: str = db.DB_PATH):
+    def __init__(self, path: str = ENGINE_PATH, db_path: str = db.DB_PATH,
+                 warming: bool = True):
         self.db_path = db_path
+        self.path = path
         self.fg = Slot(path)
         try:
             self.bg = Slot(path)
@@ -175,9 +186,51 @@ class Pool:
         self._warm_queue: queue.Queue = queue.Queue()
         self._warm_generation = 0
         self._warm_lock = threading.Lock()
+        self._slot_lock = threading.Lock()
+        self._warm_on = bool(warming)
         self._stop = threading.Event()
         self._warmer = threading.Thread(target=self._warm_loop, daemon=True)
         self._warmer.start()
+
+    # --- the idle switch --------------------------------------------------
+
+    @property
+    def warming(self) -> bool:
+        return self._warm_on
+
+    def set_warming(self, on: bool) -> bool:
+        """Background analysis on or off.
+
+        Off empties the queue and stops the search already running, so the
+        processor goes quiet at once rather than after the current position.
+        Your own moves are still graded: that work is asked for, not guessed.
+        """
+        on = bool(on)
+        with self._warm_lock:
+            self._warm_on = on
+            self._warm_generation += 1
+            try:
+                while True:
+                    self._warm_queue.get_nowait()
+            except queue.Empty:
+                pass
+        if not on:
+            with self._slot_lock:
+                if self.bg is not None:
+                    self.bg.kill()
+                    self.bg = None
+        return self._warm_on
+
+    def _bg_slot(self):
+        """The warmer's engine, started again if the idle switch stopped it.
+        Only work you asked for gets it back."""
+        with self._slot_lock:
+            if self.bg is None:
+                try:
+                    self.bg = Slot(self.path)
+                except Exception:
+                    self.bg = None
+            return self.bg
 
     # --- cache ------------------------------------------------------------
 
@@ -225,7 +278,7 @@ class Pool:
             return hit
         if board.is_game_over(claim_draw=True):
             return []
-        target = self.bg if (slot == "bg" and self.bg) else self.fg
+        target = (self._bg_slot() or self.fg) if slot == "bg" else self.fg
         infos = target.analyse(board, depth, multipv)
         lines = _lines_from_info(board, infos, multipv)
         self._store(board, depth, multipv, lines, phase)
@@ -268,6 +321,8 @@ class Pool:
         """Queue (fen, depth, multipv) jobs. The warmer is cancelled and
         requeued the moment the foreground position changes."""
         with self._warm_lock:
+            if not self._warm_on:
+                return
             if reset:
                 self._warm_generation += 1
                 try:
@@ -286,7 +341,7 @@ class Pool:
             except queue.Empty:
                 continue
             with self._warm_lock:
-                if gen != self._warm_generation:
+                if gen != self._warm_generation or not self._warm_on:
                     continue
             try:
                 board = chess.Board(fen)
@@ -299,6 +354,14 @@ class Pool:
         self.fg.close()
         if self.bg:
             self.bg.close()
+
+    def busy(self) -> bool:
+        """Is an engine searching right now? Both slot locks are held only
+        for the length of a search."""
+        for slot in (self.fg, self.bg):
+            if slot is not None and slot.lock.locked():
+                return True
+        return False
 
 
 def probe(path: str = ENGINE_PATH) -> dict:

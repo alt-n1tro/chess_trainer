@@ -16,7 +16,10 @@
 
 <header id="top">
   <div class="brand">Chess&nbsp;Trainer</div>
+  <button id="btn-warming" class="ghost power" aria-pressed="true"
+          title="Background analysis. Off frees the processor at once; your own moves are still graded."></button>
   <div class="top-actions">
+    <button id="btn-library" class="ghost">Games played</button>
     <button id="btn-game" class="ghost">Game</button>
     <button id="btn-stats" class="ghost">Stats</button>
     <button id="btn-help" class="ghost" aria-label="Help and statistics">?</button>
@@ -40,11 +43,13 @@
     </div>
     <div id="board-status"><span class="turn-dot"></span><span id="status-text"></span></div>
     <div id="menu" class="overlay" hidden></div>
+    <div id="library" class="overlay" hidden></div>
     <div id="help" class="overlay" hidden></div>
     <div id="stats" class="overlay" hidden></div>
   </section>
 
   <aside id="panel">
+    <div id="cards"></div>
     <div id="pick">
       <button id="btn-random" class="primary">Random position</button>
       <button id="btn-openings">Openings</button>

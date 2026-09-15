@@ -22,6 +22,7 @@ const el = {
   menu: $("menu"), help: $("help"), editor: $("editor"), toast: $("toast"),
   modeBtn: $("btn-mode"), modeList: $("mode-list"), pick: $("pick"),
   chainBtn: $("btn-chain"), chainList: $("chain-list"),
+  cards: $("cards"), library: $("library"), warmBtn: $("btn-warming"),
 };
 
 const MODE_LABEL = { openings: "Openings", middlegame: "Middlegame", endgame: "Endgame" };
@@ -31,6 +32,8 @@ const MARKER_BEST = { class: "marker-square-best", slice: "markerSquare" };
 const MARKER_PLAYED = { class: "marker-square-played", slice: "markerSquare" };
 const MARKER_SELECTED = { class: "marker-square-selected", slice: "markerSquare" };
 const ARROW_BEST = { class: "arrow-best" };
+// What the right-click annotator draws, as opposed to what the app draws.
+const ANNOTATION_CLASS = /^(arrow|marker-circle)-(success|warning|info|danger)$/;
 
 let state = null;
 let shownKey = null;      // which round the board is currently showing
@@ -39,6 +42,7 @@ let busy = 0;
 let pvCursor = null;      // {kind, index} while walking a principal variation
 let submitting = false;   // one move per turn, however it was entered
 let selected = null;      // the square whose piece is picked up
+let pickedUpByPress = false;  // did the press now finishing pick that piece up?
 
 const board = new Chessboard(el.board, {
   position: FEN.start,
@@ -113,8 +117,110 @@ async function apply(data) {
     `<span>${MODE_LABEL[m.mode]}</span>` +
     `<span class="n">${m.count} position${m.count === 1 ? "" : "s"}</span></li>`
   ).join("");
+  renderWarming(data.warming !== false);
+  renderCards(data);
   if (data.game) await renderGame(data.game);
   else await renderDrill(data.drill);
+}
+
+/** The idle switch: what it says is what the engines are doing. */
+function renderWarming(on) {
+  el.warmBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  el.warmBtn.innerHTML = `<span class="dot"></span>` +
+    (on ? "Engines warming" : "Engines idle");
+}
+
+/** The lock on one game, and the analysis running, as standing cards at the
+    top of the panel. Neither goes away on its own: the lock has an x, and a
+    finished analysis is dismissed when you have read it. */
+function renderCards(data) {
+  const job = data.job;
+  const focus = data.focus;
+  let html = "";
+  if (job && !jobDismissed(job)) html += jobCard(job);
+  if (focus) html += focusCard(focus, data);
+  el.cards.innerHTML = html;
+  pollJob(job);
+}
+
+let dismissedJob = null;          // the finished analysis you have read
+function jobDismissed(job) {
+  return !job.active && dismissedJob === jobKey(job);
+}
+function jobKey(job) {
+  return `${job.source}|${job.game_id}|${job.stage}`;
+}
+
+function jobCard(job) {
+  const pct = job.moves_total
+    ? Math.round(100 * job.moves_done / job.moves_total) : 0;
+  if (job.stage === "error") {
+    return `<div class="card-note"><button class="x" data-act="job-dismiss"` +
+      ` title="Dismiss">✕</button><div class="kicker">Analysis failed</div>` +
+      `<div class="title">${esc(job.error || "It did not say why.")}</div></div>`;
+  }
+  if (job.active) {
+    const what = job.stage === "importing" ? "Fetching the game"
+      : `Move ${job.moves_done} of ${job.moves_total}` +
+        (job.games > 1 ? ` · game ${job.game_index} of ${job.games}` : "");
+    return `<div class="card-note"><div class="kicker">Analysing` +
+      ` · ${job.seconds}s</div>` +
+      `<div class="title">${esc(job.game || job.source)}</div>` +
+      `<div class="meta">${esc(what)} · ${job.positions} position` +
+      `${job.positions === 1 ? "" : "s"} so far</div>` +
+      `<div class="track"><div class="fill" style="width:${pct}%"></div></div></div>`;
+  }
+  return `<div class="card-note"><button class="x" data-act="job-dismiss"` +
+    ` title="Dismiss">✕</button><div class="kicker">Analysed` +
+    ` · ${job.seconds}s</div>` +
+    `<div class="title">${esc(job.game || job.source)}</div>` +
+    `<div class="meta">${job.positions} position` +
+    `${job.positions === 1 ? "" : "s"} to drill` +
+    (job.accuracy !== null && job.accuracy !== undefined
+      ? ` · you played ${job.accuracy}%` : "") + `</div>` +
+    (job.game_id
+      ? `<div class="row"><button class="primary" data-act="drill-game"` +
+        ` data-id="${job.game_id}">Drill this game</button>` +
+        `<button data-act="open-game" data-id="${job.game_id}">Open it</button></div>`
+      : "") + `</div>`;
+}
+
+function focusCard(focus, data) {
+  const counts = focus.counts || {};
+  const parts = Object.keys(counts).filter((m) => counts[m])
+    .map((m) => `${counts[m]} ${MODE_NOUN[m]}`);
+  const who = `${esc(focus.white || "?")} vs ${esc(focus.black || "?")}`;
+  return `<div class="card-note locked">` +
+    `<button class="x" data-act="unlock" title="Drill every game again">✕</button>` +
+    `<div class="kicker">🔒 Drilling this game only</div>` +
+    `<div class="title">${who}</div>` +
+    `<div class="meta">${parts.join(" · ") || "no positions"}` +
+    (focus.accuracy !== null && focus.accuracy !== undefined
+      ? ` · you played ${focus.accuracy}%` : "") + `</div>` +
+    `<div class="row"><button class="primary" data-act="random">Random from it</button>` +
+    `<button data-act="open-game" data-id="${focus.id}">Open it</button></div></div>`;
+}
+
+/** While an analysis runs, ask how it is going. Nothing polls otherwise. */
+let jobTimer = null;
+function pollJob(job) {
+  if (!job || !job.active) { clearTimeout(jobTimer); jobTimer = null; return; }
+  if (jobTimer) return;
+  jobTimer = setTimeout(async () => {
+    jobTimer = null;
+    const res = await fetch("/api/analyse/status",
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+      .then((r) => r.json()).catch(() => null);
+    if (!res) return;
+    if (state) {
+      state.job = res.job;
+      state.focus = res.focus;
+      if (res.modes) state.modes = res.modes;
+      renderCards(state);
+      // A finished analysis changes what the pools hold.
+      if (res.job && !res.job.active) call("/api/state", {});
+    }
+  }, 600);
 }
 
 async function renderDrill(d) {
@@ -380,6 +486,10 @@ function inputHandler(event) {
     case INPUT_EVENT_TYPE.moveInputStarted: {
       const moves = legal[event.squareFrom];
       if (!moves || !moves.length) return false;
+      // The library picks a piece up on the press, before the click arrives.
+      // Remember whether this press is what picked it up, so the click that
+      // follows knows a second click on the same piece puts it down again.
+      pickedUpByPress = selected !== event.squareFrom;
       select(event.squareFrom);
       return true;
     }
@@ -538,6 +648,120 @@ async function openMenu() {
   });
 }
 
+/** Every game in the database, searchable, each one drillable on its own. */
+let library = { games: [], q: "", elo: "", from: "", to: "" };
+
+async function openLibrary() {
+  const res = await call("/api/games", {});
+  if (!res) return;
+  library.games = res.games || [];
+  show(el.library,
+    `<button class="close ghost" data-act="close">✕</button>` +
+    `<h2>Games played</h2>` +
+    `<div class="filters"><div class="line">` +
+    `<input id="lib-q" placeholder="Name, opening or result" autocomplete="off">` +
+    `<input id="lib-elo" class="narrow" placeholder="Elo 1500-1700" autocomplete="off">` +
+    `</div><div class="line">` +
+    `<input id="lib-from" type="date" title="Played from">` +
+    `<input id="lib-to" type="date" title="Played up to">` +
+    `<button data-act="lib-clear">Clear</button></div>` +
+    `<div class="line"><input id="lib-src" placeholder="Paste a chess.com link or PGN to analyse">` +
+    `<button class="primary" data-act="analyse">Analyse</button></div></div>` +
+    `<div class="count" id="lib-count"></div><div class="glist" id="lib-list"></div>`);
+  ["lib-q", "lib-elo", "lib-from", "lib-to"].forEach((id) => {
+    const box = $(id);
+    box.value = { "lib-q": library.q, "lib-elo": library.elo,
+                  "lib-from": library.from, "lib-to": library.to }[id];
+    box.addEventListener("input", () => {
+      library.q = $("lib-q").value; library.elo = $("lib-elo").value;
+      library.from = $("lib-from").value; library.to = $("lib-to").value;
+      drawLibrary();
+    });
+  });
+  $("lib-q").focus();
+  drawLibrary();
+}
+
+/** Two numbers anywhere in the box are read as a range; one as a floor. */
+function eloRange(text) {
+  const nums = (text.match(/\d+/g) || []).map(Number);
+  if (!nums.length) return null;
+  if (nums.length === 1) return [nums[0], 9999];
+  return [Math.min(nums[0], nums[1]), Math.max(nums[0], nums[1])];
+}
+
+function libraryRows() {
+  const q = library.q.trim().toLowerCase();
+  const elo = eloRange(library.elo);
+  const from = library.from ? Date.parse(library.from + "T00:00:00") / 1000 : null;
+  const to = library.to ? Date.parse(library.to + "T23:59:59") / 1000 : null;
+  return library.games.filter((g) => {
+    const mine = g.my_colour === "white" ? g.white_elo : g.black_elo;
+    const theirs = g.my_colour === "white" ? g.black_elo : g.white_elo;
+    if (q) {
+      const hay = [g.white, g.black, g.opening, g.result, g.time_class,
+                   g.my_colour].join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (elo) {
+      const seen = [mine, theirs].filter((n) => n);
+      if (!seen.some((n) => n >= elo[0] && n <= elo[1])) return false;
+    }
+    if (from && (g.played_at || 0) < from) return false;
+    if (to && (g.played_at || 0) > to) return false;
+    return true;
+  });
+}
+
+function drawLibrary() {
+  const rows = libraryRows();
+  const focus = state && state.focus ? state.focus.id : null;
+  $("lib-count").textContent =
+    `${rows.length} of ${library.games.length} game${library.games.length === 1 ? "" : "s"}`;
+  $("lib-list").innerHTML = rows.map((g) => {
+    const opp = g.my_colour === "white" ? g.black : g.white;
+    const oppElo = g.my_colour === "white" ? g.black_elo : g.white_elo;
+    const mine = g.my_colour === "white" ? g.white_elo : g.black_elo;
+    const res = g.result === "1/2-1/2" ? "drew"
+      : ((g.my_colour === "white") === (g.result === "1-0") ? "won" : "lost");
+    const date = g.played_at
+      ? new Date(g.played_at * 1000).toISOString().slice(0, 10) : "";
+    const reviewed = g.plies !== null && g.plies !== undefined;
+    const acc = g.accuracy === null || g.accuracy === undefined
+      ? (reviewed ? "analysed" : "not analysed") : `${g.accuracy}%`;
+    const bits = [date, `as ${g.my_colour}`, res, acc,
+                  `${g.positions} position${g.positions === 1 ? "" : "s"}`];
+    if (g.blunders) bits.push(`${g.blunders} blunder${g.blunders === 1 ? "" : "s"}`);
+    return `<div class="grow${focus === g.id ? " on" : ""}">` +
+      `<div><div class="who">${esc(opp || "?")}` +
+      `${oppElo ? ` <span class="meta">(${oppElo})</span>` : ""}` +
+      `${mine ? ` <span class="meta">· you ${mine}</span>` : ""}</div>` +
+      `<div class="sub">${esc(bits.join(" · "))}` +
+      `${g.opening ? " · " + esc(g.opening) : ""}</div></div>` +
+      `<div class="acts">` +
+      (g.positions
+        ? `<button class="primary" data-act="drill-game" data-id="${g.id}">Drill</button>`
+        : "") +
+      (reviewed ? "" :
+        `<button data-act="analyse-game" data-id="${g.id}">Analyse</button>`) +
+      `<button data-act="open-game" data-id="${g.id}">Open</button></div></div>`;
+  }).join("") || `<div class="meta">No game matches that.</div>`;
+}
+
+/** Import a game and review it, then lock drilling onto it. */
+async function startAnalysis(source, gameId) {
+  const box = $("lib-src");
+  const text = source || (box ? box.value.trim() : "");
+  if (!gameId && !text) { toast("Paste a chess.com game link, or a PGN."); return; }
+  const res = await call("/api/analyse",
+    gameId ? { game_id: gameId } : { source: text });
+  if (!res) return;
+  if (box) box.value = "";
+  closeOverlays();
+  dismissedJob = null;
+  if (state) { state.job = res; renderCards(state); }
+}
+
 async function openHelp() {
   const [stats, leaks] = await Promise.all([call("/api/stats", {}), call("/api/leaks", {})]);
   const a = (stats && stats.answers) || {};
@@ -551,9 +775,18 @@ async function openHelp() {
     ` uses them all before repeating, and you find the best reply. Ask for` +
     ` more than one move and the opponent answers back, so you have to find a` +
     ` plan and not just a move. Right-click the board to draw arrows and` +
-    ` circles, as on chess.com.</div>` +
+    ` circles, as on chess.com; any left click on the board wipes them.` +
+    ` Clicking a piece you have already picked up puts it down.</div>` +
+    `<div class="sec">One game at a time</div>` +
+    `<div class="meta"><b>Games played</b> lists everything in the database,` +
+    ` searchable by name, Elo range and date. Analyse a chess.com link or a` +
+    ` pasted PGN there and it is reviewed, its positions extracted, and` +
+    ` drilling locked to that game until you lift the lock with the ✕ on its` +
+    ` card. <b>Engines warming</b>, top left, stops the background analysis` +
+    ` at once when you would rather have the processor back.</div>` +
     `<div class="sec">Keys</div><table class="stats">` + [
-      ["Enter", "Next position"], ["O / B", "Menu"], ["M", "Cycle mode"],
+      ["Enter", "Next position"], ["O / B", "Menu"], ["G", "Games played"],
+      ["W", "Engines warming on/off"], ["M", "Cycle mode"],
       ["E", "Set up a position"], ["S", "Save position"], ["Backspace", "Back"],
       ["R", "Replay this position"], ["D", "Drill from here"],
       ["Space", "Show me the move"], ["1 \u2013 5", "Pick the opponent's nth option"],
@@ -684,13 +917,14 @@ function show(node, html) {
 }
 
 function closeOverlays() {
-  [el.menu, el.help, $("stats")].forEach((n) => { n.hidden = true; });
+  [el.menu, el.help, $("stats"), el.library].forEach((n) => { n.hidden = true; });
   el.modeList.hidden = true;
   el.chainList.hidden = true;
 }
 
 function anyOverlayOpen() {
-  return !el.menu.hidden || !el.help.hidden || !$("stats").hidden;
+  return !el.menu.hidden || !el.help.hidden || !$("stats").hidden
+    || !el.library.hidden;
 }
 
 // --- events ----------------------------------------------------------------
@@ -700,10 +934,28 @@ function anyOverlayOpen() {
 // paths cannot race each other over one move.
 el.board.addEventListener("click", (event) => {
   const square = squareFromEvent(event);
+  const fresh = pickedUpByPress;
+  pickedUpByPress = false;
   if (!square) return;
+  // Your own arrows and circles are notes about the position in front of you,
+  // so a left click on the board wipes them, the way lichess and chess.com do.
+  // It happens here rather than on mousedown because clearing rebuilds the
+  // marker layer: do that between press and release and the click that
+  // follows lands on nothing, and the piece is never picked up.
+  clearAnnotations();
   if (editor.open) return editorClick(square);
-  clickToMove(square);
+  clickToMove(square, fresh);
 });
+
+/** Drop every right-click arrow and circle. Ours -- the best-move arrow and
+    the square markers -- are drawn by other code and stay. */
+function clearAnnotations() {
+  if (!board.setAnnotations) return;
+  const drawn = board.getAnnotations();
+  const mine = (item) => ANNOTATION_CLASS.test((item.type && item.type.class) || "");
+  if (!drawn.arrows.some(mine) && !drawn.markers.some(mine)) return;
+  board.setAnnotations({});
+}
 
 /** Place or clear one square. The board is not rebuilt: a full redraw would
     drop any click that lands while it is running. */
@@ -728,10 +980,12 @@ function squareFromEvent(event) {
   return node ? node.getAttribute("data-square") : null;
 }
 
-function clickToMove(square) {
+function clickToMove(square, justPickedUp) {
   const d = state && state.drill;
   if (!d || !d.can_answer || submitting) return;
   const legal = d.legal || {};
+  // Clicking the piece you already had up puts it down again.
+  if (selected === square && !justPickedUp) return select(null);
   if (selected && selected !== square) {
     const move = (legal[selected] || []).find((m) => m.to === square);
     if (move) {
@@ -880,6 +1134,21 @@ document.addEventListener("click", async (event) => {
       return void call("/api/game/open", { id: Number(hit.dataset.id) });
     case "gdrill": closeOverlays(); shownKey = null;
       return void call("/api/drill/review", { id: Number(hit.dataset.id) });
+    case "drill-game": closeOverlays(); shownKey = null;
+      dismissedJob = state.job ? jobKey(state.job) : null;
+      return void call("/api/focus", { game_id: Number(hit.dataset.id), draw: true });
+    case "unlock": shownKey = null;
+      return void call("/api/focus", { game_id: null });
+    case "job-dismiss":
+      dismissedJob = state.job ? jobKey(state.job) : null;
+      return renderCards(state);
+    case "analyse": return startAnalysis();
+    case "analyse-game":
+      return void startAnalysis(null, Number(hit.dataset.id));
+    case "lib-clear":
+      library = { games: library.games, q: "", elo: "", from: "", to: "" };
+      return openLibrary();
+    case "library": return openLibrary();
     default: return;
   }
 });
@@ -887,6 +1156,12 @@ document.addEventListener("click", async (event) => {
 $("btn-random").addEventListener("click", () => { shownKey = null; call("/api/random", {}); });
 $("btn-openings").addEventListener("click", openMenu);
 $("btn-help").addEventListener("click", openHelp);
+$("btn-library").addEventListener("click", openLibrary);
+el.warmBtn.addEventListener("click", () => {
+  const on = el.warmBtn.getAttribute("aria-pressed") === "true";
+  renderWarming(!on);                     // the switch answers at once
+  call("/api/warming", { on: !on });
+});
 $("btn-stats").addEventListener("click", () => openStats());
 $("btn-game").addEventListener("click", async () => {
   const url = window.prompt("chess.com game link, or paste a PGN");
@@ -962,6 +1237,8 @@ document.addEventListener("keydown", (event) => {
     case "r": event.preventDefault(); shownKey = null; return void call("/api/reset", {});
     case "?": case "h": event.preventDefault(); return openHelp();
     case "t": event.preventDefault(); return openStats();
+    case "g": event.preventDefault(); return openLibrary();
+    case "w": event.preventDefault(); return void el.warmBtn.click();
     default: break;
   }
 });

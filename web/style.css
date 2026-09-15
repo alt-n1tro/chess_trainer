@@ -92,7 +92,63 @@ input:focus { outline: none; border-color: var(--accent); }
   padding: 12px 22px; border-bottom: 1px solid var(--line);
   background: var(--raise);
 }
-.brand { font-weight: 700; letter-spacing: .2px; margin-right: auto; }
+.brand { font-weight: 700; letter-spacing: .2px; }
+/* The idle switch sits on the left, by the title; everything else is pushed
+   to the right by its auto margin. */
+#btn-warming { margin-right: auto; font-variant-numeric: tabular-nums; }
+#btn-warming[aria-pressed="false"] { color: var(--dim); border-style: dashed; }
+#btn-warming .dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); margin-right: 7px; vertical-align: 1px;
+}
+#btn-warming[aria-pressed="false"] .dot { background: #555a63; }
+
+/* the lock on one game, and the analysis running ------------------------- */
+#cards:empty { display: none; }
+#cards { display: grid; gap: 8px; margin-bottom: 14px; }
+.card-note {
+  position: relative; border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--raise-2); padding: 10px 30px 10px 12px;
+  box-shadow: var(--shadow);
+}
+.card-note .kicker {
+  font-size: 11px; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--dim); margin-bottom: 3px;
+}
+.card-note .title { font-weight: 600; font-size: 13.5px; }
+.card-note .meta { color: var(--dim); font-size: 12px; margin-top: 3px; }
+.card-note .x {
+  position: absolute; right: 6px; top: 6px; padding: 2px 7px;
+  background: none; border: 0; color: var(--dim); font-size: 15px; cursor: pointer;
+}
+.card-note .x:hover { color: var(--fg); }
+.card-note.locked { border-color: var(--accent); }
+.card-note .track {
+  height: 6px; background: #14161b; border-radius: 4px; overflow: hidden;
+  margin-top: 8px;
+}
+.card-note .fill { height: 100%; background: var(--accent); transition: width .3s; }
+.card-note .row { display: flex; gap: 8px; margin-top: 9px; }
+.card-note .row button { flex: 1; font-size: 12.5px; padding: 5px 8px; }
+
+/* the games library ------------------------------------------------------ */
+#library .filters { display: grid; gap: 8px; margin-bottom: 10px; }
+#library .filters .line { display: flex; gap: 8px; flex-wrap: wrap; }
+#library input { flex: 1; min-width: 90px; }
+#library input.narrow { flex: 0 0 92px; }
+#library .glist { display: grid; gap: 4px; max-height: 52vh; overflow: auto; }
+.grow {
+  display: grid; grid-template-columns: 1fr auto; gap: 8px 10px;
+  align-items: center; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid transparent;
+}
+.grow:hover { background: var(--raise-2); }
+.grow.on { border-color: var(--accent); }
+.grow .who { font-size: 13.5px; }
+.grow .sub { color: var(--dim); font-size: 12px; margin-top: 2px; }
+.grow .acts { display: flex; gap: 6px; }
+.grow .acts button { font-size: 12px; padding: 4px 9px; }
+#library .count { color: var(--dim); font-size: 12px; margin: 8px 0 2px; }
 .top-actions { display: flex; align-items: center; gap: 6px; }
 .menu-wrap { position: relative; }
 .dropdown {

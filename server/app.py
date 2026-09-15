@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import chess
 import chess.pgn
 
-from . import corpus, db, drills, engine, stats
+from . import corpus, db, drills, engine, jobs, review, stats
 from .drills import Drill
 
 WEB_DIR = os.path.join(db.ROOT, "web")
@@ -44,8 +44,107 @@ class Trainer:
             self.chain = 1
         self.stack: list[Drill] = []
         self.game = None            # game-walk state, when one is loaded
+        self.job = None             # an import-and-review, while one runs
+        # Drilling one game only, when you have locked onto one.
+        self.focus = self._stored_focus()
+        self.pool.set_warming(db.meta_get(self.conn, "warming", "1") != "0")
         # Pools built under an older rule are rebuilt from the reviews; cheap.
         corpus.repool_reviewed(self.conn)
+
+    # -- the lock on one game
+    def _stored_focus(self):
+        try:
+            game_id = int(db.meta_get(self.conn, "focus_game", "") or 0)
+        except (TypeError, ValueError):
+            return None
+        if not game_id:
+            return None
+        row = self.conn.execute("SELECT id FROM games WHERE id=?",
+                                (game_id,)).fetchone()
+        return row["id"] if row else None
+
+    def set_focus(self, game_id) -> None:
+        """Lock drilling to one game, or unlock it with None. A game with no
+        positions is refused: locking onto it would leave nothing to draw."""
+        if game_id in (None, "", 0):
+            self.focus = None
+            db.meta_set(self.conn_t(), "focus_game", "")
+            return
+        game_id = int(game_id)
+        conn = self.conn_t()
+        row = conn.execute("SELECT id FROM games WHERE id=?", (game_id,)).fetchone()
+        if row is None:
+            raise LookupError("no such game")
+        n = conn.execute("SELECT COUNT(*) n FROM positions WHERE source_game=?",
+                         (game_id,)).fetchone()["n"]
+        if not n:
+            raise LookupError("That game has no drill positions yet."
+                              " Analyse it first.")
+        self.focus = game_id
+        db.meta_set(conn, "focus_game", game_id)
+
+    def use_a_mode_with_positions(self) -> None:
+        """After locking onto one game, move to a mode that game actually
+        has, so the lock does not land you in an empty pool."""
+        counts = {m["mode"]: m["count"] for m in self.mode_summary()}
+        if counts.get(self.mode):
+            return
+        for mode in drills.MODES:
+            if counts.get(mode):
+                self.set_mode(mode)
+                return
+
+    def focus_state(self) -> dict | None:
+        if not self.focus:
+            return None
+        conn = self.conn_t()
+        row = conn.execute(
+            "SELECT g.id, g.white, g.black, g.white_elo, g.black_elo, g.result,"
+            " g.my_colour, g.played_at, g.url, r.accuracy"
+            " FROM games g LEFT JOIN reviews r ON r.game_id=g.id"
+            " WHERE g.id=?", (self.focus,)).fetchone()
+        if row is None:
+            self.focus = None
+            return None
+        out = dict(row)
+        out["counts"] = {
+            mode: conn.execute(
+                "SELECT COUNT(*) n FROM positions WHERE phase=? AND source_game=?",
+                (drills.MODE_PHASE[mode], self.focus)).fetchone()["n"]
+            for mode in drills.MODES
+        }
+        out["total"] = sum(out["counts"].values())
+        return out
+
+    # -- background analysis
+    def start_analysis(self, source: str, game_id=None, depth=None,
+                       budget=None) -> dict:
+        if self.job is not None and self.job.snapshot()["active"]:
+            raise ValueError("An analysis is already running.")
+        if not game_id and not (source or "").strip():
+            raise ValueError("Paste a chess.com game link, or a PGN.")
+        self.job = jobs.Analysis(source, self.pool,
+                                 int(depth or review.REVIEW_DEPTH),
+                                 float(budget if budget is not None else review.BUDGET),
+                                 game_id=int(game_id) if game_id else None)
+        self.job.start()
+        return self.job.snapshot()
+
+    def job_state(self) -> dict | None:
+        """The running analysis, if any. A finished one locks drilling onto
+        the game it reviewed, so the lock is on whether or not the page was
+        watching when it finished."""
+        if self.job is None:
+            return None
+        snap = self.job.snapshot()
+        if (not snap["active"] and snap["stage"] == "done" and snap["game_id"]
+                and snap["games"] == 1 and not getattr(self.job, "locked", False)):
+            self.job.locked = True
+            try:
+                self.set_focus(snap["game_id"])
+            except LookupError as err:
+                snap["error"] = str(err)
+        return snap
 
     # -- helpers
     @property
@@ -84,9 +183,10 @@ class Trainer:
 
     def random_drill(self, name=None, colour=None) -> Drill:
         conn = self.conn_t()
-        row = drills.pick_random(conn, self.mode, name, colour)
+        row = drills.pick_random(conn, self.mode, name, colour,
+                                 game_id=self.focus)
         if row is None:
-            raise LookupError(EMPTY_POOL[self.mode])
+            raise LookupError(self._empty_message())
         # What the opponent really played here, when the position comes from
         # a reviewed game.
         played = None
@@ -211,7 +311,10 @@ class Trainer:
         # "mode" field, and the client must not mistake those for one.
         out = {"kind": "state", "mode": self.mode, "modes": self.mode_summary(),
                "chain": self.chain, "max_chain": drills.MAX_CHAIN,
-               "stack_depth": len(self.stack), "game": self.game_state()}
+               "stack_depth": len(self.stack), "game": self.game_state(),
+               # job first: a finished one sets the lock that focus reports.
+               "job": self.job_state(), "focus": self.focus_state(),
+               "warming": self.pool.warming}
         drill = self.drill
         if drill is not None:
             out["drill"] = drill.to_json()
@@ -225,14 +328,30 @@ class Trainer:
         return out
 
     def mode_summary(self) -> list[dict]:
+        """How many positions each mode holds -- of this game alone, while a
+        lock is on, so the counts say what you can actually draw."""
         conn = self.conn_t()
         out = []
         for mode in drills.MODES:
-            row = conn.execute("SELECT COUNT(*) n FROM positions WHERE phase=?",
-                               (drills.MODE_PHASE[mode],)).fetchone()
+            sql = "SELECT COUNT(*) n FROM positions WHERE phase=?"
+            args = [drills.MODE_PHASE[mode]]
+            if self.focus:
+                sql += " AND source_game=?"
+                args.append(self.focus)
+            row = conn.execute(sql, args).fetchone()
             out.append({"mode": mode, "count": row["n"] or 0,
                         "active": mode == self.mode})
         return out
+
+    def _empty_message(self) -> str:
+        if self.focus:
+            game = self.focus_state() or {}
+            other = [m for m, n in (game.get("counts") or {}).items() if n]
+            where = (" It has " + ", ".join(f"{(game['counts'][m])} in {m}"
+                                            for m in other) + ".") if other else ""
+            return (f"This game has no {MODE_NOUN[self.mode]} positions."
+                    f"{where} Lift the lock to drill every game.")
+        return EMPTY_POOL[self.mode]
 
     # -- game walk
     def open_game(self, game_id: int) -> dict:
@@ -364,6 +483,9 @@ def grading_tone(verdict: str) -> str | None:
     from . import grading
     return grading.TONES.get(verdict)
 
+
+MODE_NOUN = {"openings": "opening", "middlegame": "middlegame",
+             "endgame": "endgame"}
 
 EMPTY_POOL = {
     "openings": "No openings yet. ./run import --player <name>, then ./run review.",
@@ -660,13 +782,18 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/games":
             rows = conn.execute(
                 "SELECT g.id, g.white, g.black, g.white_elo, g.black_elo, g.result,"
-                " g.my_colour, g.played_at, g.time_class, r.accuracy,"
-                " (SELECT name FROM positions p WHERE p.source_game=g.id"
-                "  AND p.phase='opening' LIMIT 1) opening"
+                " g.my_colour, g.played_at, g.time_class, g.url, r.accuracy,"
+                " r.plies, (SELECT name FROM positions p WHERE p.source_game=g.id"
+                "  AND p.phase='opening' LIMIT 1) opening,"
+                " (SELECT COUNT(*) FROM positions p WHERE p.source_game=g.id)"
+                "   positions,"
+                " (SELECT COUNT(*) FROM review_moves m WHERE m.game_id=g.id"
+                "   AND m.is_me=1 AND m.verdict='blunder') blunders"
                 " FROM games g LEFT JOIN reviews r ON r.game_id=g.id"
                 " WHERE g.my_colour IS NOT NULL"
-                " ORDER BY g.played_at DESC, g.id DESC LIMIT 200").fetchall()
-            return self.json({"games": [dict(r) for r in rows]})
+                " ORDER BY g.played_at DESC, g.id DESC LIMIT 500").fetchall()
+            return self.json({"games": [dict(r) for r in rows],
+                              "focus": t.focus})
 
         if path == "/api/game/open":
             t.open_game(int(data.get("id")))
@@ -756,6 +883,29 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/import":
             ids = corpus.import_source(conn, data.get("source") or "")
             return self.json({"imported": len(ids)})
+
+        if path == "/api/analyse":
+            # Import a game and review it, on a thread, so the page can watch.
+            return self.json(t.start_analysis(data.get("source") or "",
+                                              data.get("game_id")))
+
+        if path == "/api/analyse/status":
+            job = t.job_state()
+            return self.json({"job": job, "focus": t.focus_state(),
+                              "modes": t.mode_summary()})
+
+        if path == "/api/focus":
+            t.set_focus(data.get("game_id"))
+            if data.get("draw") and t.focus:
+                t.use_a_mode_with_positions()
+                return self.json(self._with_drill(t))
+            return self.json(t.state())
+
+        if path == "/api/warming":
+            on = bool(data.get("on"))
+            t.pool.set_warming(on)
+            db.meta_set(conn, "warming", "1" if on else "0")
+            return self.json(t.state())
 
         return self.json({"error": "no such endpoint"}, 404)
 

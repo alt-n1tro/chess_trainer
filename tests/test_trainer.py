@@ -267,6 +267,60 @@ class Themes(unittest.TestCase):
         self.assertEqual(themes.tag(fen, "e2e5", []), [])
 
 
+class ThemeDescriptions(unittest.TestCase):
+    """Every theme in the statistics says what it counts, in one line."""
+
+    def test_every_theme_has_a_description(self):
+        for key in themes.LABELS:
+            self.assertIn(key, themes.DESCRIPTIONS, key)
+
+    def test_the_statistics_carry_them(self):
+        rows = stats._theme_rows({"hanging_piece": {"n": 4, "hit": 3, "bad": 0}})
+        self.assertTrue(rows[0]["help"].startswith("Your opponent left"))
+
+
+class OneGameOnly(unittest.TestCase):
+    """Locking onto a game: every draw comes from it, and nothing else."""
+
+    def _db(self):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(open(db.SCHEMA_PATH).read())
+        for game_id in (1, 2):
+            conn.execute(
+                "INSERT INTO games(id, white, black, result, my_colour, pgn)"
+                " VALUES(?,?,?,?,?,?)",
+                (game_id, "me", "them", "1-0", "white", "1. e4 e5 *"))
+        rows = [(101, "middlegame", 1), (102, "middlegame", 1),
+                (201, "middlegame", 2), (202, "endgame", 2)]
+        for pos_hash, phase, game_id in rows:
+            conn.execute(
+                "INSERT INTO positions(pos_hash, fen, phase, source_game, ply,"
+                " eval_cp, name, my_colour) VALUES(?,?,?,?,?,?,?,?)",
+                (pos_hash, chess.Board().fen(), phase, game_id, 4, 10,
+                 "Some opening", "white"))
+        conn.commit()
+        return conn
+
+    def test_a_locked_draw_only_offers_that_game(self):
+        conn = self._db()
+        for _ in range(12):
+            row = drills.pick_random(conn, "middlegame", game_id=2)
+            self.assertEqual(row["source_game"], 2)
+
+    def test_without_the_lock_both_games_can_come_up(self):
+        conn = self._db()
+        seen = {drills.pick_random(conn, "middlegame")["source_game"]
+                for _ in range(40)}
+        self.assertEqual(seen, {1, 2})
+
+    def test_a_phase_that_game_has_nothing_in_draws_nothing(self):
+        conn = self._db()
+        self.assertIsNone(drills.pick_random(conn, "endgame", game_id=1))
+        self.assertIsNotNone(drills.pick_random(conn, "endgame", game_id=2))
+
+
 class MateFlip(unittest.TestCase):
     """A side being mated sits at 0.0 win probability. Zero is falsy, and
     the flip once read it as 'no evaluation' and handed back 50%: a forced

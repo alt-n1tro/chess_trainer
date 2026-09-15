@@ -8,9 +8,10 @@ actually was: **Best move**, **Second best**, **Third best**, or, when it costs
 enough, **Inaccuracy**, **Mistake** or **Blunder**. Then it shows the engine's
 move and explains what yours gave up.
 
-Drag or click to move, as on chess.com. Right-click to draw arrows and circle
-squares (Shift, Alt and Shift+Alt for other colours). Positions you get wrong
-come back more often.
+Drag or click to move, as on chess.com. Clicking a piece you already picked up
+puts it down again. Right-click to draw arrows and circle squares (Shift, Alt
+and Shift+Alt for other colours); any left click on the board clears them.
+Positions you get wrong come back more often.
 
 Local web app, one screen, Firefox on Fedora. No accounts, no telemetry, no
 outbound network except an explicitly requested chess.com fetch.
@@ -52,10 +53,37 @@ is reviewed.
 
 ## Keys
 
-`Enter` next · `1`–`5` pick the opponent's nth option · `Shift+1`–`5` moves per position · `T` statistics · `O`/`B` menu · `M` cycle mode · `E` set up a position ·
-`S` save · `Backspace` back · `R` reset and replay this position · `?`/`H` help ·
-`Esc` close · `←` `→` step a move in a game · `Home`/`End` jump · `1`–`5` pick
-the nth opponent option.
+`Enter` next · `1`–`5` pick the opponent's nth option · `Shift+1`–`5` moves per
+position · `T` statistics · `G` games played · `W` engines warming on/off ·
+`O`/`B` menu · `M` cycle mode · `E` set up a position · `S` save ·
+`Backspace` back · `R` reset and replay this position · `?`/`H` help ·
+`Esc` close · `←` `→` step a move in a game · `Home`/`End` jump.
+
+## One game at a time
+
+**Games played** lists every game in the database: search by name, opening or
+result, narrow by Elo range (`1500-1700`, or `1600` for a floor) and by date.
+Each row drills that game, opens it move by move, or analyses it if it has
+never been through the engine.
+
+*Analyse* takes a chess.com link or a pasted PGN, imports it, reviews every
+move and extracts the drill positions, with a progress card that counts the
+moves searched and the positions found as it goes. It all lands in the
+database, so it is there next time.
+
+A finished analysis **locks** drilling to that game: a card at the top of the
+panel says which game, and how many positions it holds per phase. While it is
+up, *Random position* draws from that game and nothing else, and the mode
+counts show only what that game has. The `✕` on the card lifts the lock and
+gives you every reviewed game again. The lock survives a restart.
+
+## The idle switch
+
+Two Stockfish processes run: one answers you, one works ahead so the next
+position is instant. The second is what keeps a core busy. **Engines warming**
+in the top left turns it off — the queue is dropped and the search already
+running is stopped, so the processor goes quiet at once. Your own moves are
+still graded; only the guessing-ahead stops. The setting sticks.
 
 ## Statistics you can act on
 
