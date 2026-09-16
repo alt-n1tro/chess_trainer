@@ -173,10 +173,10 @@ class Trainer:
 
     # -- starting drills
     def new_drill(self, fen: str, *, name=None, source=None,
-                  mode=None, played_move=None) -> Drill:
+                  mode=None, played_move=None, first_move=None) -> Drill:
         drill = Drill(self.conn_t(), self.pool, fen, mode or self.mode,
                       name=name, source=source, chain=self.chain,
-                      played_move=played_move)
+                      played_move=played_move, first_move=first_move)
         self.stack = [drill]
         self.game = None
         return drill
@@ -481,17 +481,29 @@ class Trainer:
         state = self.game_state()
         board = chess.Board(state["fen"])
         want = chess.WHITE if self.game["colour"] == "white" else chess.BLACK
+        first_move = None
         if board.turn == want:
-            raise ValueError(
-                "It is your move in this position. Step one move back, or "
-                "switch colour: a drill starts with the opponent to move."
-            )
+            # You are to move here, which means the question is the one their
+            # last move asked. Step back to before it and play it again, so
+            # the drill is the reply rather than a hunt for their move.
+            ply = state["ply"]
+            moves = self.game["moves"]
+            if not ply or ply > len(moves):
+                raise ValueError(
+                    "It is your move in this position and there is no move of"
+                    " theirs before it to answer. Step forward, or switch"
+                    " colour.")
+            last = moves[ply - 1]
+            board = chess.Board(last["fen_before"])
+            state = dict(state, fen=last["fen_before"])
+            first_move = last["uci"]
         label = {"kind": "game", "game": {
             "white": self.game["white"], "black": self.game["black"],
             "white_elo": self.game["white_elo"], "black_elo": self.game["black_elo"],
             "result": self.game["result"], "my_colour": self.game["my_colour"],
             "url": self.game["url"]}}
-        drill = self.new_drill(state["fen"], name=None, source=label)
+        drill = self.new_drill(state["fen"], name=None, source=label,
+                               first_move=first_move, played_move=first_move)
         return drill
 
 
@@ -651,6 +663,43 @@ class Handler(BaseHTTPRequestHandler):
             state = t.state()
             state["message"] = str(exc)
             return state
+
+    def _moment(self, conn, data: dict) -> dict:
+        """The opponent move a drill should replay, from either a review row
+        id or a game and ply. Whichever move was picked, the one that sets the
+        question is the opponent's."""
+        row = None
+        if data.get("id"):
+            row = conn.execute(
+                "SELECT m.*, g.white, g.black, g.white_elo, g.black_elo,"
+                " g.result, g.my_colour, g.url FROM review_moves m"
+                " JOIN games g ON g.id=m.game_id WHERE m.id=?",
+                (data["id"],)).fetchone()
+        elif data.get("game_id") and data.get("ply"):
+            row = conn.execute(
+                "SELECT m.*, g.white, g.black, g.white_elo, g.black_elo,"
+                " g.result, g.my_colour, g.url FROM review_moves m"
+                " JOIN games g ON g.id=m.game_id"
+                " WHERE m.game_id=? AND m.ply=?",
+                (int(data["game_id"]), int(data["ply"]))).fetchone()
+        if row is None:
+            raise LookupError("no such moment")
+        if row["is_me"]:
+            theirs = conn.execute(
+                "SELECT * FROM review_moves WHERE game_id=? AND ply=?",
+                (row["game_id"], row["ply"] - 1)).fetchone()
+            mine = row
+            if theirs is None:
+                raise ValueError("That is the first move of the game, so there"
+                                 " is nothing of theirs to answer.")
+        else:
+            theirs = row
+            mine = conn.execute(
+                "SELECT * FROM review_moves WHERE game_id=? AND ply=?",
+                (row["game_id"], row["ply"] + 1)).fetchone()
+        out = dict(row)
+        out["theirs"], out["mine"] = theirs, mine
+        return out
 
     def route(self, t: Trainer, path: str, data: dict):
         conn = t.conn_t()
@@ -850,31 +899,25 @@ class Handler(BaseHTTPRequestHandler):
             return self.json(stats.gym_view(conn))
 
         if path == "/api/drill/review":
-            # A moment from one of your games: the question is the position
-            # you faced, so the drill starts one move earlier and replays the
-            # opponent's move into it.
-            row = conn.execute(
-                "SELECT m.*, g.white, g.black, g.white_elo, g.black_elo, g.result,"
-                " g.my_colour, g.url FROM review_moves m JOIN games g ON g.id=m.game_id"
-                " WHERE m.id=?", (data.get("id"),)).fetchone()
-            if row is None:
-                raise LookupError("no such moment")
-            prev = conn.execute(
-                "SELECT fen, move FROM review_moves WHERE game_id=? AND ply=?",
-                (row["game_id"], row["ply"] - 1)).fetchone()
-            if prev is None:
-                raise ValueError("That is the first move of the game.")
+            # A moment from one of your games. Picking a move of theirs means
+            # "let me answer that", and picking one of yours means the same
+            # thing about the move they had just played -- either way the
+            # drill starts before their move and replays it, and the question
+            # is the reply.
+            row = self._moment(conn, data)
+            theirs, mine = row["theirs"], row["mine"]
             chain = int(data.get("chain") or t.chain)
-            if row["mate_in"] and data.get("play_out"):
-                chain = int(row["mate_in"])
+            if mine and mine["mate_in"] and data.get("play_out"):
+                chain = int(mine["mate_in"])
             label = {"kind": "review", "game": {
                 "white": row["white"], "black": row["black"],
                 "white_elo": row["white_elo"], "black_elo": row["black_elo"],
                 "result": row["result"], "my_colour": row["my_colour"],
-                "url": row["url"]}, "ply": row["ply"]}
-            drill = Drill(conn, self.pool if False else t.pool, prev["fen"], t.mode,
-                          name=f"Move {(row['ply'] + 1) // 2} of your game",
-                          source=label, first_move=prev["move"], chain=chain)
+                "url": row["url"]}, "ply": theirs["ply"] + 1}
+            drill = Drill(conn, t.pool, theirs["fen"], t.mode,
+                          name=f"Move {(theirs['ply'] + 2) // 2} of your game",
+                          source=label, first_move=theirs["move"], chain=chain,
+                          played_move=theirs["move"])
             t.stack, t.game = [drill], None
             return self.json(t.state())
 

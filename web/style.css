@@ -321,6 +321,16 @@ body[data-editing] #tree-box { display: none; }
 .card .label { font-weight: 650; color: var(--tone); font-size: 17px; }
 .card .cost { color: var(--dim); font-size: 13px; margin-left: auto; }
 .card .detail { color: var(--dim); font-size: 13px; margin-top: 2px; }
+/* the two explanations, kept apart */
+.card .section { margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--line); }
+.card .section:first-of-type { border-top: 0; padding-top: 0; }
+.card .section .tag {
+  font-size: 11px; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--dim); margin-bottom: 5px;
+}
+.card .row { display: flex; gap: 8px; margin-top: 11px; }
+.card .row button { flex: 1; }
+.card .row.small button { font-size: 13px; padding: 7px 10px; }
 .card .explain { margin-top: 9px; font-size: 14px; line-height: 1.55; }
 .card .explain p { margin: 0 0 7px; }
 .card .explain p:last-child { margin-bottom: 0; }

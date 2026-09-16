@@ -112,8 +112,17 @@ class Judge:
 
 @dataclass
 class Explanation:
+    """Two explanations, kept apart.
+
+    `cost` is about the move you played: what it gave up. `why` is about the
+    engine's move: why that one works. They answer different questions and
+    the panel reveals them one at a time, so nothing gives the answer away
+    before you ask for it.
+    """
     text: str = ""
-    items: list = field(default_factory=list)
+    items: list = field(default_factory=list)     # both, in order
+    cost: list = field(default_factory=list)      # about your move
+    why: list = field(default_factory=list)       # about the engine's move
     my_pv: list = field(default_factory=list)     # [{uci, san}, ...]
     best_pv: list = field(default_factory=list)
 
@@ -1767,12 +1776,14 @@ def explain(fen: str, my_move: str, best_move: str, pvs: dict,
 
     if my_move and best_move and my_move == best_move:
         out.items = [dict(r) for r in reasons]
+        out.why = [dict(r) for r in reasons]
         out.text = " ".join(r["text"] for r in reasons[:2])
         return out
 
     if not mine_sans:
         # Shown rather than answered: there is nothing of yours to compare.
         out.items = [dict(r) for r in reasons]
+        out.why = [dict(r) for r in reasons]
         out.text = " ".join(r["text"] for r in reasons[:2])
         return out
 
@@ -1788,6 +1799,8 @@ def explain(fen: str, my_move: str, best_move: str, pvs: dict,
     # What yours cost first -- it is the answer to "what did I miss" -- then
     # why theirs works.
     out.items = cost + [dict(r) for r in reasons]
+    out.cost = [dict(c) for c in cost]
+    out.why = [dict(r) for r in reasons]
     head = cost[0]["text"] if cost else ""
     out.text = " ".join([t for t in [head, reasons[0]["text"]] if t])
     return out

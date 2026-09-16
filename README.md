@@ -60,6 +60,18 @@ position · `T` statistics · `G` games played · `W` engines warming on/off ·
 `Esc` close or leave set-up · `Ctrl+Z` undo while setting up ·
 `←` `→` step a move in a game · `Home`/`End` jump.
 
+## Nothing is given away
+
+When you have answered, the panel says what your move was worth and nothing
+else: no best move named, no arrow on the board, no lines to read. One button
+reveals why your move was what it was, and only then does a second offer to
+explain the engine's move. Pressing `X` walks the same two steps. Asking to be
+shown the move, or finding it yourself, opens both at once — there is nothing
+left to spoil.
+
+The two explanations are kept apart because they answer different questions:
+what your move gave up, and why the engine's move works.
+
 ## Why the move is the move
 
 Every verdict comes with an explanation of the engine's move, whether you

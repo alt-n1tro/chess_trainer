@@ -273,7 +273,8 @@ async function renderDrill(d) {
 
   markers(markersFor(d), true);
   board.removeArrows();
-  if (a && d.done && a.verdict !== "best" && a.best_move) {
+  // The arrow is the answer, so it waits until you have asked for it.
+  if (a && d.done && a.verdict !== "best" && a.best_move && bestIsOut(d)) {
     board.addArrow(ARROW_BEST, a.best_move.slice(0, 2), a.best_move.slice(2, 4));
     markers([[a.best_move.slice(0, 2), MARKER_BEST],
              [a.best_move.slice(2, 4), MARKER_BEST]], false);
@@ -391,6 +392,33 @@ function renderProgress(d) {
   el.progress.innerHTML = html;
 }
 
+// Nothing is given away before you ask for it: the reasons are behind a
+// button, and the engine's move is behind a second one.
+let revealed = { key: null, cost: false, best: false };
+
+function revealKey(d) {
+  const a = d.answer || {};
+  return `${d.node_id_current}|${d.round}|${d.step || 1}|${a.my_move || ""}`;
+}
+
+function revealState(d) {
+  const key = revealKey(d);
+  if (revealed.key !== key) {
+    const a = d.answer || {};
+    // Asking to be shown the move is asking for all of it. Finding the move
+    // yourself leaves nothing to spoil either.
+    const open = a.verdict === "shown" || a.verdict === "best";
+    revealed = { key, cost: open, best: open };
+  }
+  return revealed;
+}
+
+function bestIsOut(d) {
+  const a = d.answer;
+  return !!a && (a.verdict === "shown" || a.verdict === "best"
+                 || revealState(d).best);
+}
+
 function renderVerdict(d) {
   const a = d.answer;
   if (!a) {
@@ -404,24 +432,60 @@ function renderVerdict(d) {
     return;
   }
   const ex = a.explanation || {};
-  const cost = a.delta_wp === null || a.delta_wp === undefined ? ""
+  const open = revealState(d);
+  const mine = a.verdict !== "best" && a.verdict !== "shown";
+  const lost = a.delta_wp === null || a.delta_wp === undefined ? ""
     : `${a.delta_wp.toFixed(1)} points lost`;
   const head = a.verdict === "shown"
     ? `<span class="move">${esc(a.best_san)}</span><span class="label">Shown</span>`
     : `<span class="move">${esc(a.my_san)}</span><span class="label">${esc(a.label)}</span>`;
+
+  // 1. Your move: what it gave up. Behind a button, because the whole point
+  //    is to think first.
+  let yours = "";
+  if (mine) {
+    const detail = (ex.cost && ex.cost.length)
+      ? ex.cost.map((i) => `<p class="${esc(i.kind || "")}">${esc(i.text)}</p>`).join("")
+      : `<p>The engine keeps ${a.wp_best !== null && a.wp_best !== undefined
+          ? `${a.wp_best.toFixed(0)}%` : "more"} where your move leaves` +
+        ` ${a.wp_mine !== null && a.wp_mine !== undefined
+          ? `${a.wp_mine.toFixed(0)}%` : "less"}. Nothing structural went` +
+        ` wrong — it is simply not the best move here.</p>`;
+    yours = open.cost
+      ? `<div class="section"><div class="tag">Your move</div>` +
+        `<div class="explain">${detail}</div>` +
+        pvRow("Line", ex.my_pv, "mine") + `</div>`
+      : `<div class="row small"><button data-act="reveal-cost">` +
+        `Why was ${esc(a.my_san)} ${esc((a.label || "").toLowerCase())}?` +
+        `</button></div>`;
+  }
+
+  // 2. The engine's move: named only once you ask.
+  let theirs = "";
+  const whyHtml = (ex.why && ex.why.length)
+    ? ex.why.map((i) => `<p class="${esc(i.kind || "")}">${esc(i.text)}</p>`).join("")
+    : (ex.text ? `<p>${esc(ex.text)}</p>` : "");
+  if (!mine) {
+    theirs = `<div class="section"><div class="explain">${whyHtml}</div>` +
+             pvRow("Line", ex.best_pv, "best") + `</div>`;
+  } else if (open.best) {
+    theirs = `<div class="section"><div class="tag">The engine's move</div>` +
+      `<div class="detail">Best was <b>${esc(a.best_san)}</b>` +
+      (a.wp_best !== null && a.wp_best !== undefined
+        ? ` · ${a.wp_best.toFixed(0)}% vs ${(a.wp_mine ?? 0).toFixed(0)}%` : "") +
+      `</div><div class="explain">${whyHtml}</div>` +
+      pvRow("Line", ex.best_pv, "best") + `</div>`;
+  } else if (open.cost) {
+    theirs = `<div class="row small"><button class="primary"` +
+      ` data-act="reveal-best">Explain the best move</button></div>`;
+  }
+
   el.verdict.innerHTML =
     `<div class="card ${a.tone}">` +
-    `<div class="head">${head}<span class="cost">${cost}</span></div>` +
-    (a.detail ? `<div class="detail">${esc(a.detail)}</div>` : "") +
-    (a.verdict !== "best" && a.verdict !== "shown" && a.best_san
-      ? `<div class="detail">Best was <b>${esc(a.best_san)}</b>` +
-        (a.wp_best !== null && a.wp_best !== undefined
-          ? ` · ${a.wp_best.toFixed(0)}% vs ${(a.wp_mine ?? 0).toFixed(0)}%` : "") +
-        `</div>`
-      : "") +
-    explainHtml(ex) +
-    (d.done ? `<div class="lines">${pvRow("Yours", ex.my_pv, "mine")}` +
-              `${pvRow("Best", ex.best_pv, "best")}</div>` : "") +
+    `<div class="head">${head}<span class="cost">${lost}</span></div>` +
+    (a.detail && !mine ? `<div class="detail">${esc(a.detail)}</div>` : "") +
+    (a.detail && mine && open.cost ? `<div class="detail">${esc(a.detail)}</div>` : "") +
+    yours + theirs +
     `</div>` +
     (d.done ? "" : `<div class="ask">Keep going: find move ${d.step} of ` +
       `${d.chain}.</div>`);
@@ -637,8 +701,13 @@ async function renderGame(g) {
     return `${num}<span class="mv ${i + 1 === g.ply ? "on" : ""}" data-ply="${i + 1}">` +
       `${esc(m.san)}${mark}</span>`;
   }).join(" ") + `</div>`;
-  const drillable = last && last.is_me && last.review_id && last.verdict !== "best"
-    ? [`<button data-act="gdrill" data-id="${last.review_id}">Drill this moment</button>`] : [];
+  // Picking a move of theirs means "let me answer that"; picking one of
+  // yours means the same about the move they had just played. Either way the
+  // drill is the reply, so both are offered.
+  const drillable = last && last.review_id
+    ? [`<button data-act="gdrill" data-game="${g.id}" data-ply="${g.ply}">` +
+       (last.is_me ? "Drill this moment" : "Drill my reply to this") +
+       `</button>`] : [];
   el.actions.innerHTML =
     group("This moment") +
     rowOf([btnHtml("gplay", "Play on from here", false, "primary")]) +
@@ -849,7 +918,8 @@ async function openHelp() {
     ` card. <b>Engines warming</b>, top left, stops the background analysis` +
     ` at once when you would rather have the processor back.</div>` +
     `<div class="sec">Keys</div><table class="stats">` + [
-      ["Enter", "Next position"], ["O / B", "Browse positions"],
+      ["Enter", "Next position"], ["X", "Explain: your move, then theirs"],
+      ["O / B", "Browse positions"],
       ["G", "Games played"],
       ["W", "Engines warming on/off"], ["M", "Cycle mode"],
       ["E", "Set up a position"], ["S", "Save position"], ["Backspace", "Back"],
@@ -1272,7 +1342,9 @@ document.addEventListener("click", async (event) => {
     case "open-game": closeOverlays(); shownKey = null;
       return void call("/api/game/open", { id: Number(hit.dataset.id) });
     case "gdrill": closeOverlays(); shownKey = null;
-      return void call("/api/drill/review", { id: Number(hit.dataset.id) });
+      return void call("/api/drill/review", hit.dataset.game
+        ? { game_id: Number(hit.dataset.game), ply: Number(hit.dataset.ply) }
+        : { id: Number(hit.dataset.id) });
     case "drill-game": closeOverlays(); shownKey = null;
       dismissedJob = state.job ? jobKey(state.job) : null;
       call("/api/analyse/dismiss", {});
@@ -1283,6 +1355,15 @@ document.addEventListener("click", async (event) => {
       dismissedJob = state.job ? jobKey(state.job) : null;
       renderCards(state);
       return void call("/api/analyse/dismiss", {});
+    case "reveal-cost":
+      revealState(state.drill).cost = true;
+      revealed.cost = true;
+      return renderVerdict(state.drill);
+    case "reveal-best":
+      revealState(state.drill).best = true;
+      revealed.best = true;
+      shownKey = null;
+      return void renderDrill(state.drill);
     case "analyse": return startAnalysis();
     case "analyse-game":
       return void startAnalysis(null, Number(hit.dataset.id));
@@ -1379,6 +1460,14 @@ document.addEventListener("keydown", (event) => {
       return void call("/api/back", {});
     case "r": event.preventDefault(); shownKey = null; return void call("/api/reset", {});
     case "?": case "h": event.preventDefault(); return openHelp();
+    case "x": {
+      event.preventDefault();
+      if (!d || !d.answer) return;
+      const open = revealState(d);
+      if (!open.cost) { open.cost = true; return renderVerdict(d); }
+      if (!open.best) { open.best = true; shownKey = null; return void renderDrill(d); }
+      return;
+    }
     case "t": event.preventDefault(); return openStats();
     case "g": event.preventDefault(); return openLibrary();
     case "w": event.preventDefault(); return void el.warmBtn.click();
