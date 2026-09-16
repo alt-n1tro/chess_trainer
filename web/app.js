@@ -622,7 +622,12 @@ async function renderGame(g) {
     `<div class="meta">${esc(g.result || "")} · ${g.moves.length} plies` +
     ` · working from ${g.colour}</div>`;
   el.progress.innerHTML = "";
-  el.verdict.innerHTML =
+  // What the review worked out about the engine's move here, if this was one
+  // of yours and you did not find it.
+  const why = last && last.why && last.why.length
+    ? `<div class="card ${last.tone || ""}"><div class="explain">` +
+      last.why.map((t) => `<p>${esc(t)}</p>`).join("") + `</div></div>` : "";
+  el.verdict.innerHTML = why +
     (g.reviewed ? `<div class="hint">Reviewed at depth ${g.review_depth}` +
       (g.accuracy !== null ? ` \u00b7 your accuracy ${g.accuracy}%` : "") +
       `. Coloured marks are verdicts; click a move to see it.</div>` : "") +

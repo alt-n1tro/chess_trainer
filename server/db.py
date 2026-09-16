@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(ROOT, "data", "trainer.db")
 SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _local = threading.local()
 
@@ -70,6 +70,10 @@ def migrate(conn: sqlite3.Connection, have: int) -> None:
         columns = {r["name"] for r in conn.execute("PRAGMA table_info(review_moves)")}
         if "depth" not in columns:
             conn.execute("ALTER TABLE review_moves ADD COLUMN depth INTEGER")
+    if have < 5:
+        # The explanations table is new, and the script above creates it.
+        # Nothing to move: they are recomputed by the next review.
+        pass
     conn.execute(
         "UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),)
     )

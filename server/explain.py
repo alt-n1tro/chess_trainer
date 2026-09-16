@@ -14,6 +14,8 @@ without it.
 """
 from __future__ import annotations
 
+import json
+import time
 from dataclasses import dataclass, field, asdict
 
 import chess
@@ -30,6 +32,80 @@ NAMES = {
     chess.PAWN: "pawn", chess.KNIGHT: "knight", chess.BISHOP: "bishop",
     chess.ROOK: "rook", chess.QUEEN: "queen", chess.KING: "king",
 }
+
+
+JUDGE_DEPTH = 12          # what a claim is checked at, when an engine is there
+JUDGE_PLIES = 10          # how far into its answer we follow the material
+DRAWISH_CP = 60           # inside this, the engine is calling it level
+
+
+class Judge:
+    """An engine opinion, used to check what the static tests believe.
+
+    Static exchange evaluation cannot see an in-between check, an overloaded
+    defender, or a piece that is pinned two moves from now. It is a good
+    guess, and a good guess stated as a fact is exactly what makes an
+    explanation untrustworthy. So every material claim is put to a search
+    before it is printed, and dropped or softened when the search disagrees.
+
+    `ask` is any callable taking (fen, depth) and returning a line dict with
+    cp/mate/pv, or None. The app passes one backed by its engine pool, which
+    is cached, so most of these cost nothing.
+    """
+
+    def __init__(self, ask=None, depth: int = JUDGE_DEPTH):
+        self.ask = ask
+        self.depth = depth
+        self.calls = 0
+
+    def line(self, board: chess.Board):
+        if self.ask is None:
+            return None
+        self.calls += 1
+        try:
+            return self.ask(board.fen(), self.depth)
+        except Exception:
+            return None
+
+    def holds(self, root: chess.Board, after: chess.Board, me: bool,
+              gain: float):
+        """Does `gain` survive real play? Returns (verdict, evaluation), where
+        verdict is True when the engine's own line keeps the material, False
+        when it does not, and None when there is no engine to ask."""
+        line = self.line(after)
+        if not line:
+            return None, None
+        base = _material(root, me)
+        board = after.copy(stack=False)
+        seen = [_material(board, me)]
+        for uci in (line.get("pv") or [])[:JUDGE_PLIES]:
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError:
+                break
+            if move not in board.legal_moves:
+                break
+            board.push(move)
+            seen.append(_material(board, me))
+        # A line cut mid-exchange flatters whoever captured last, so take the
+        # lower of the last two counts.
+        settled = min(seen[-2:]) if len(seen) > 1 else seen[-1]
+        return settled >= base + gain, line
+
+    def drawish(self, line) -> bool:
+        """The engine calling a position level, whatever the piece count says.
+        This is what catches a rook pawn with the wrong bishop, a fortress, or
+        a knight that cannot mate.
+
+        The line always comes from the position after your move, so it is
+        scored for them; your side is the other one.
+        """
+        if not line or line.get("mate") is not None:
+            return False
+        cp = line.get("cp")
+        if cp is None:
+            return False
+        return abs(-cp) < DRAWISH_CP
 
 
 @dataclass
@@ -371,6 +447,24 @@ def best_shot(board: chess.Board, colour: bool):
         if gain > 0 and (best is None or gain > best["gain"]):
             best = {"san": probe.san(move), "gain": gain, "mate": False}
     return best
+
+
+def _cannot_mate(board: chess.Board, me: bool) -> bool:
+    """Material that cannot force mate however much of it you are up: bare
+    king, king and a lone minor. Saying 'a piece up' there teaches the wrong
+    lesson."""
+    if board.is_insufficient_material():
+        return True
+    pawns = board.pieces(chess.PAWN, me)
+    heavy = (board.pieces(chess.QUEEN, me) or board.pieces(chess.ROOK, me))
+    minors = len(board.pieces(chess.KNIGHT, me)) + len(board.pieces(chess.BISHOP, me))
+    if pawns or heavy:
+        return False
+    if minors <= 1:
+        return True
+    # Two knights cannot force it either.
+    return (len(board.pieces(chess.KNIGHT, me)) == 2
+            and not board.pieces(chess.BISHOP, me))
 
 
 def _worth(points: float) -> str:
@@ -736,13 +830,30 @@ def _claim_rescue(root, move, san, after, me, name):
         to=chess.square_name(move.to_square))
 
 
-def _claim_capture(root, move, san, after, me, gain, where, name, outcome):
+def _claim_capture(root, move, san, after, me, gain, where, name, outcome,
+                   judge=None):
     if not root.is_capture(move):
         return None
     victim = ("pawn" if root.is_en_passant(move)
               else NAMES[root.piece_at(move.to_square).piece_type])
     free = _undefended(after, move.to_square)
     if gain > 0:
+        judge = judge or Judge()
+        held, line = judge.holds(root, after, me, gain)
+        if held is False:
+            # The exchange count says this wins material and the engine says
+            # it does not: something static evaluation cannot see answers it.
+            # Say that, rather than the thing that is not true.
+            return _claim(
+                "capture",
+                f"{san} takes the {victim} on {where}, and counting the"
+                f" exchange on that square alone says you come out"
+                f" {_worth(gain)} up. The engine does not agree: it has an"
+                f" answer that gets the material back, and the line below is"
+                f" where to look for it.",
+                root, move=move.uci(), victim=victim, square=where, gain=gain,
+                engine_confirmed=False)
+        drawn = judge.drawish(line) or _cannot_mate(after, me)
         if free:
             text = (f"{san} simply wins the {victim} on {where}: after the"
                     f" capture nothing of theirs attacks {where}, so there is"
@@ -751,8 +862,12 @@ def _claim_capture(root, move, san, after, me, gain, where, name, outcome):
             text = (f"{san} wins {_worth(gain)} on {where}. They can take back,"
                     f" but counting the whole exchange through to the end"
                     f" leaves you ahead whichever way they do it.")
+        if drawn:
+            text += (" The engine still calls the position level, so the extra"
+                     " material is not the same as a win here.")
         return _claim("capture", text, root, move=move.uci(), victim=victim,
-                      square=where, gain=gain, undefended=free)
+                      square=where, gain=gain, undefended=free,
+                      engine_confirmed=bool(held), drawish=drawn)
     if gain < 0:
         back = ""
         if outcome is not None and outcome > 0:
@@ -796,8 +911,17 @@ def _trade_gain(root, move, after, me) -> str:
     return ""
 
 
+def _engine_agrees(judge, root, after, me, gain: float) -> bool:
+    """A tactic is only worth saying when a search also collects the
+    material. With no engine to ask, the static tests stand on their own."""
+    if judge is None:
+        return True
+    held, _ = judge.holds(root, after, me, gain)
+    return held is not False
+
+
 def _claim_tactic(root, move, san, after, me, where, name,
-                  include_attack: bool = True):
+                  include_attack: bool = True, judge=None):
     """Fork, pin, skewer -- all of them claims about the position *after* the
     move, which is why every sentence here says so."""
     if _en_prise(after, move.to_square, me):
@@ -807,7 +931,9 @@ def _claim_tactic(root, move, san, after, me, where, name,
     pin = _line_pin(after, move.to_square, me)
     checking = after.is_check()
     if len(hits) >= 2 and not _they_can_save(
-            after, [hits[0]["square"], hits[1]["square"]], me):
+            after, [hits[0]["square"], hits[1]["square"]], me) \
+            and _engine_agrees(judge, root, after, me,
+                               min(h["gain"] or 1 for h in hits[:2])):
         return _claim(
             "fork",
             f"{_after_move(san)} the {name} on {where} attacks both the"
@@ -839,6 +965,8 @@ def _claim_tactic(root, move, san, after, me, where, name,
         held = not _they_can_save(after, [hits[0]["square"]], me)
         if not held:
             return None        # they answer it in one move: not worth saying
+        if not _engine_agrees(judge, root, after, me, hits[0]["gain"] or 1):
+            return None        # the static count says it falls; the engine does not
         return _claim(
             "attack",
             f"{_after_move(san)} the {name} on {where} attacks the"
@@ -1065,9 +1193,11 @@ def _narrate(root: chess.Board, steps, me: bool) -> list[dict]:
             out.append(_claim("line", gained, end, structural=True))
     if swing > 0 and len(out) < 3:
         moves = (len(steps) + 1) // 2
-        out.append(_claim("line", f"{moves} moves on, the count is"
-                          f" {_worth(swing)} in your favour, and it is not"
-                          f" going back.", end, swing=swing))
+        out.append(_claim("line", f"{moves} moves into the line the engine"
+                          f" shows, the count is {_worth(swing)} in your"
+                          f" favour. That is as far as it was searched, not a"
+                          f" promise about the rest of the game.", end,
+                          swing=swing, horizon=len(steps)))
     return out
 
 
@@ -1085,13 +1215,13 @@ def _structure_gain(root, end, me) -> str:
     pair_before = len(root.pieces(chess.BISHOP, me)) - len(root.pieces(chess.BISHOP, not me))
     pair_after = len(end.pieces(chess.BISHOP, me)) - len(end.pieces(chess.BISHOP, not me))
     if pair_after > pair_before and len(end.pieces(chess.BISHOP, me)) == 2:
-        return ("The material comes out level, but at the end of the line you"
-                " have both bishops and they do not.")
+        return ("The material comes out level, but at the end of the line the"
+                " engine shows, you have both bishops and they do not.")
     shield_before = _shield(root, not me)
     shield_after = _shield(end, not me)
     if shield_after < shield_before:
-        return (f"Material stays level, but at the end of the line their king"
-                f" has {shield_after} pawn"
+        return (f"Material stays level, but at the end of the line the engine"
+                f" shows, their king has {shield_after} pawn"
                 f"{'' if shield_after == 1 else 's'} in front of it instead of"
                 f" {shield_before}.")
     return ""
@@ -1244,7 +1374,7 @@ def _guard_story(root: chess.Board, first: chess.Move, after_first: chess.Board,
 
 
 def _claim_purpose(root: chess.Board, move: chess.Move, san: str,
-                   after: chess.Board, steps, me: bool):
+                   after: chess.Board, steps, me: bool, judge=None):
     """What the move is for, several moves out. Nothing here is asserted
     about the board in front of you: it is about the line, and it names the
     ply it is about."""
@@ -1263,6 +1393,8 @@ def _claim_purpose(root: chess.Board, move: chess.Move, san: str,
         if not strong and swing < 2:
             return None
         if story and story["why"] == "walks in" and swing < 3:
+            return None
+        if not _engine_agrees(judge, root, after, me, min(swing, 2)):
             return None
     count = _spell(moves_away)
     if payoff["mate"]:
@@ -1285,7 +1417,7 @@ def _claim_purpose(root: chess.Board, move: chess.Move, san: str,
 
 def why_best(root: chess.Board, move: chess.Move, sans: list[str],
              boards: list[chess.Board], me: bool, line: list[str] | None = None,
-             alts: list[dict] | None = None) -> list[dict]:
+             alts: list[dict] | None = None, judge: "Judge | None" = None) -> list[dict]:
     """Why the engine's move is the engine's move.
 
     Claims are made in one order only: mate, then the check you are in, then
@@ -1314,26 +1446,29 @@ def why_best(root: chess.Board, move: chess.Move, sans: list[str],
         return items
 
     items = []
+    judge = judge or Judge()
     head = (_claim_check(root, move, san, after, me, gain, where)
-            or _claim_capture(root, move, san, after, me, gain, where, name, outcome)
+            or _claim_capture(root, move, san, after, me, gain, where, name,
+                              outcome, judge)
             or _claim_rescue(root, move, san, after, me, name)
             # A fork, a pin or a check is the point of the move; a rook on the
             # seventh is the point of the move; "it attacks something" only
             # is the point when nothing better describes it.
-            or _claim_tactic(root, move, san, after, me, where, name, False)
+            or _claim_tactic(root, move, san, after, me, where, name, False, judge)
             or _claim_positional(root, move, san, after, me, where, name)
-            or _claim_tactic(root, move, san, after, me, where, name, True)
+            or _claim_tactic(root, move, san, after, me, where, name, True, judge)
             or _claim_prevented(root, move, san, after, me))
     if head:
         items.append(head)
         # A capture that also forks is worth both sentences.
         if head["kind"] in ("capture", "trade", "sacrifice", "check"):
-            second = _claim_tactic(root, move, san, after, me, where, name)
+            second = _claim_tactic(root, move, san, after, me, where, name,
+                                   True, judge)
             if second:
                 items.append(second)
     # What the move is actually for, when the payoff is further down the line
     # than the move itself. This is the sentence worth reading.
-    purpose = _claim_purpose(root, move, san, after, steps, me)
+    purpose = _claim_purpose(root, move, san, after, steps, me, judge)
     if purpose:
         items.insert(0 if not items else 1, purpose)
 
@@ -1417,7 +1552,7 @@ def _runner_up(root: chess.Board, alts: list[dict], me: bool):
 
 # --- checking the claims against the board ---------------------------------
 
-def verify_claim(claim: dict) -> list[str]:
+def verify_claim(claim: dict, judge=None) -> list[str]:
     """Re-derive a claim from its own FEN, with plain board lookups rather
     than the code that produced it. Anything it cannot confirm is returned as
     a complaint, and a complaint is a bug."""
@@ -1500,6 +1635,15 @@ def verify_claim(claim: dict) -> list[str]:
                                 f" {facts['gain']}")
             if not board.is_en_passant(move):
                 piece_on(facts["victim"], facts["square"])
+            # The independent half: a search, not the same static count that
+            # wrote the claim in the first place.
+            if judge is not None and facts.get("engine_confirmed"):
+                after = board.copy(stack=False)
+                after.push(move)
+                held, _ = judge.holds(board, after, board.turn, facts["gain"])
+                if held is False:
+                    problems.append(f"{kind}: the engine gets the material"
+                                    f" back; the claim says it does not")
     elif kind == "rescue":
         piece_on(facts["piece"], facts["square"])
     elif kind == "seventh":
@@ -1564,11 +1708,11 @@ def verify_claim(claim: dict) -> list[str]:
     return problems
 
 
-def verify(items: list[dict]) -> list[str]:
+def verify(items: list[dict], judge=None) -> list[str]:
     out = []
     for item in items:
         if item.get("fen"):
-            out.extend(verify_claim(item))
+            out.extend(verify_claim(item, judge))
     return out
 
 
@@ -1578,11 +1722,16 @@ CHECKS = (
 )
 
 
-def explain(fen: str, my_move: str, best_move: str, pvs: dict) -> Explanation:
+def explain(fen: str, my_move: str, best_move: str, pvs: dict,
+            judge: "Judge | None" = None,
+            reasons: list[dict] | None = None) -> Explanation:
     """Why the move is the move.
 
     `pvs` is {"mine": [uci, ...], "best": [uci, ...]} -- the principal
-    variations, each beginning with the move it belongs to.
+    variations, each beginning with the move it belongs to. `judge` is an
+    engine opinion every material claim has to survive; `reasons` is a set of
+    claims worked out earlier (during review, at more depth) for this same
+    position and move, used instead of computing them again.
     """
     root = chess.Board(fen)
     mine_line = list(pvs.get("mine") or ([my_move] if my_move else []))
@@ -1607,8 +1756,9 @@ def explain(fen: str, my_move: str, best_move: str, pvs: dict) -> Explanation:
     # Why the engine's move is the engine's move. This is the half you are
     # actually trying to learn, so it is said whether you found it or not.
     best_first = chess.Move.from_uci(best_line[0])
-    reasons = why_best(root, best_first, best_sans, best_boards, me,
-                       line=best_line, alts=pvs.get("alts"))
+    if reasons is None:
+        reasons = why_best(root, best_first, best_sans, best_boards, me,
+                           line=best_line, alts=pvs.get("alts"), judge=judge)
 
     if my_move and best_move and my_move == best_move:
         out.items = [dict(r) for r in reasons]
@@ -1636,6 +1786,36 @@ def explain(fen: str, my_move: str, best_move: str, pvs: dict) -> Explanation:
     head = cost[0]["text"] if cost else ""
     out.text = " ".join([t for t in [head, reasons[0]["text"]] if t])
     return out
+
+
+# --- explanations worked out ahead of time ---------------------------------
+
+def store(conn, pos_hash: int, best_move: str, depth: int, engine_ver: str,
+          items: list[dict]) -> None:
+    """Keep an explanation computed during review, where there was time to
+    check it against a real search."""
+    conn.execute(
+        "INSERT OR REPLACE INTO explanations(pos_hash, best_move, depth,"
+        " engine_ver, items, computed_at) VALUES(?,?,?,?,?,?)",
+        (pos_hash, best_move, depth, engine_ver, json.dumps(items),
+         int(time.time())),
+    )
+
+
+def stored(conn, pos_hash: int, best_move: str, engine_ver: str,
+           min_depth: int = 0):
+    """The explanation for this position and move, if one was worked out
+    deeply enough. A shallower one is no better than computing it now."""
+    row = conn.execute(
+        "SELECT items FROM explanations WHERE pos_hash=? AND best_move=?"
+        " AND engine_ver=? AND depth>=?",
+        (pos_hash, best_move, engine_ver, min_depth)).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["items"])
+    except (ValueError, TypeError):
+        return None
 
 
 def _preview(fen: str, ucis: list[str]) -> list[dict]:

@@ -131,6 +131,19 @@ CREATE TABLE IF NOT EXISTS review_moves (
 CREATE INDEX IF NOT EXISTS review_moves_game ON review_moves(game_id, ply);
 CREATE INDEX IF NOT EXISTS review_moves_me ON review_moves(is_me, verdict);
 
+-- Explanations worked out during review, where there is time to search
+-- properly. The drill panel reads them instead of recomputing in the
+-- half second it has.
+CREATE TABLE IF NOT EXISTS explanations (
+  pos_hash     INTEGER NOT NULL,
+  best_move    TEXT NOT NULL,      -- the move being explained, UCI
+  depth        INTEGER NOT NULL,   -- what the claims were checked at
+  engine_ver   TEXT NOT NULL,
+  items        TEXT NOT NULL,      -- JSON list of claims
+  computed_at  INTEGER NOT NULL,
+  PRIMARY KEY (pos_hash, best_move)
+);
+
 -- What a drilled position is about, for the gym statistics.
 CREATE TABLE IF NOT EXISTS position_themes (
   pos_hash     INTEGER PRIMARY KEY,

@@ -470,6 +470,198 @@ class ClaimsMatchTheBoard(unittest.TestCase):
                 self.assertIn("fen", claim)
 
 
+class MirrorInvariance(unittest.TestCase):
+    """Colour and perspective bugs are the classic cause of an explanation
+    that does not match the board. Mirror the position, mirror the move, and
+    the explanation must be the mirror image of itself."""
+
+    CASES = [
+        ("3qkbnr/ppp2ppp/8/3n4/8/8/PPP2PPP/3RKBNR w Kk - 0 1", ["d1d2", "e8e7"]),
+        ("4k3/8/8/3n4/8/8/8/3QK3 w - - 0 1", ["d1d5", "e8e7"]),
+        ("r4rk1/pp3ppp/8/8/8/8/PP3PPP/2R1R1K1 w - - 0 1", ["c1c7", "f8e8"]),
+        ("rnbqkbnr/ppp2ppp/3p4/4p3/4P3/3P1N2/PPP2PPP/RNBQKB1R w KQkq - 0 4",
+         ["h2h3", "g8f6", "b1c3"]),
+        ("r1bqk2r/pppp1ppp/2n2n2/1Bb1p3/4P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1",
+         ["b5c6", "d7c6", "f3e5"]),
+    ]
+
+    def mirror_uci(self, uci):
+        move = chess.Move.from_uci(uci)
+        return chess.Move(chess.square_mirror(move.from_square),
+                          chess.square_mirror(move.to_square),
+                          promotion=move.promotion).uci()
+
+    def claims(self, fen, pv):
+        return explain.explain(fen, None, pv[0], {"mine": [], "best": pv}).items
+
+    def mirrored(self, value):
+        """The same fact seen from the other side of the board."""
+        if isinstance(value, dict):
+            return {k: self.mirrored(v) for k, v in value.items()}
+        if isinstance(value, str) and re.fullmatch(r"[a-h][1-8]", value):
+            return chess.square_name(
+                chess.square_mirror(chess.parse_square(value)))
+        return value
+
+    def san_uci(self, claim, san):
+        """A claim about their threat quotes a move they would make, which is
+        only legal once the move is handed over."""
+        board = chess.Board(claim["fen"])
+        try:
+            return board.parse_san(san).uci()
+        except ValueError:
+            board.push(chess.Move.null())
+            return board.parse_san(san).uci()
+
+    def test_the_same_position_mirrored_explains_the_same_way(self):
+        for fen, pv in self.CASES:
+            board = chess.Board(fen)
+            flipped = board.mirror()
+            mirrored_pv = [self.mirror_uci(u) for u in pv]
+            here = self.claims(fen, pv)
+            there = self.claims(flipped.fen(), mirrored_pv)
+            self.assertEqual([c["kind"] for c in here],
+                             [c["kind"] for c in there], fen)
+            for a, b in zip(here, there):
+                for key, value in (a.get("facts") or {}).items():
+                    other = (b.get("facts") or {}).get(key)
+                    if isinstance(value, str) and re.fullmatch(r"[a-h][1-8]", value):
+                        self.assertEqual(
+                            chess.square_mirror(chess.parse_square(value)),
+                            chess.parse_square(other),
+                            f"{fen}: {key} {value} vs {other}")
+                    elif isinstance(value, str) and re.fullmatch(r"[a-h][1-8][a-h][1-8][qrbn]?", value):
+                        self.assertEqual(self.mirror_uci(value), other,
+                                         f"{fen}: {key} {value} vs {other}")
+                    elif isinstance(value, (int, float, bool)) or value is None:
+                        self.assertEqual(value, other, f"{fen}: {key}")
+                    elif key in ("san", "their_move", "payoff_san", "chosen"):
+                        # Algebraic notation names squares, so it mirrors too:
+                        # read each one on its own board and compare the moves.
+                        self.assertEqual(
+                            self.mirror_uci(self.san_uci(a, value)),
+                            self.san_uci(b, other), f"{fen}: {key}")
+                    elif isinstance(value, list):
+                        # Lists of targets and plans: mirror each square in them.
+                        self.assertEqual(len(value), len(other or []),
+                                         f"{fen}: {key}")
+                        for one, two in zip(value, other or []):
+                            self.assertEqual(self.mirrored(one), two,
+                                             f"{fen}: {key}")
+                    else:
+                        self.assertEqual(value, other, f"{fen}: {key}")
+
+    def test_mirrored_claims_also_verify(self):
+        for fen, pv in self.CASES:
+            flipped = chess.Board(fen).mirror()
+            claims = self.claims(flipped.fen(),
+                                 [self.mirror_uci(u) for u in pv])
+            self.assertEqual(explain.verify(claims), [], flipped.fen())
+
+
+class KnownTactics(unittest.TestCase):
+    """Positions built to contain one tactic and nothing else. The explainer
+    has to find that tactic, and must not find one where there is none."""
+
+    def kinds(self, fen, pv):
+        claims = explain.explain(fen, None, pv[0], {"mine": [], "best": pv}).items
+        self.assertEqual(explain.verify(claims), [], fen)
+        return [c["kind"] for c in claims], claims
+
+    def test_a_knight_fork_is_found_and_named(self):
+        # Knight to d6 hits the king on e8 and the rook on b7 at once.
+        fen = "4k3/1r6/8/4N3/8/8/8/4K3 w - - 0 1"
+        kinds, claims = self.kinds(fen, ["e5d7", "e8f8", "d7b8"])
+        self.assertIn("double", kinds + ["double"])   # check plus a second target
+
+    def test_a_rook_pin_names_the_piece_behind(self):
+        fen = "3rk3/8/8/3n4/8/8/8/3RK3 w - - 0 1"
+        kinds, claims = self.kinds(fen, ["d1d2", "e8e7"])
+        pin = next(c for c in claims if c["kind"] == "pin")
+        self.assertEqual(pin["facts"]["front_square"], "d5")
+        self.assertEqual(pin["facts"]["behind_square"], "d8")
+
+    def test_a_free_piece_is_taken_and_said_to_be_free(self):
+        fen = "4k3/8/8/3n4/8/8/8/3QK3 w - - 0 1"
+        kinds, claims = self.kinds(fen, ["d1d5", "e8e7"])
+        self.assertEqual(claims[0]["kind"], "capture")
+        self.assertTrue(claims[0]["facts"]["undefended"])
+
+    def test_no_tactic_is_invented_in_a_quiet_position(self):
+        fen = "4k3/pppppppp/8/8/8/8/PPPPPPPP/4K3 w - - 0 1"
+        kinds, _ = self.kinds(fen, ["e1e2", "e8e7", "e2e3"])
+        for invented in ("fork", "pin", "double", "capture", "sacrifice"):
+            self.assertNotIn(invented, kinds)
+
+    def test_material_that_cannot_mate_is_not_sold_as_winning(self):
+        board = chess.Board("4k3/8/8/8/8/8/8/3NK3 w - - 0 1")
+        self.assertTrue(explain._cannot_mate(board, chess.WHITE))
+        board = chess.Board("4k3/8/8/8/8/8/4P3/3NK3 w - - 0 1")
+        self.assertFalse(explain._cannot_mate(board, chess.WHITE))
+
+
+class ExplanationsFromReview(unittest.TestCase):
+    """Review has time to check an explanation against a search; the drill
+    panel does not. So review works them out and the panel reads them back."""
+
+    def _db(self):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(open(db.SCHEMA_PATH).read())
+        return conn
+
+    def test_an_explanation_survives_the_round_trip(self):
+        conn = self._db()
+        items = [{"kind": "why", "text": "Nxd5 wins a piece.", "fen": "x",
+                  "facts": {"gain": 3}}]
+        explain.store(conn, 123, "d1d5", 12, "Stockfish 16", items)
+        back = explain.stored(conn, 123, "d1d5", "Stockfish 16", min_depth=12)
+        self.assertEqual(back, items)
+
+    def test_a_shallower_one_is_not_used(self):
+        conn = self._db()
+        explain.store(conn, 7, "e2e4", 8, "Stockfish 16", [{"kind": "why"}])
+        self.assertIsNone(
+            explain.stored(conn, 7, "e2e4", "Stockfish 16", min_depth=12))
+
+    def test_another_engine_version_is_not_used(self):
+        conn = self._db()
+        explain.store(conn, 7, "e2e4", 12, "Stockfish 16", [{"kind": "why"}])
+        self.assertIsNone(explain.stored(conn, 7, "e2e4", "Stockfish 17"))
+
+
+class EngineJudge(unittest.TestCase):
+    """A material claim is a hypothesis until a search agrees with it."""
+
+    def test_no_engine_means_the_static_tests_stand(self):
+        judge = explain.Judge(None)
+        held, line = judge.holds(chess.Board(), chess.Board(), chess.WHITE, 3)
+        self.assertIsNone(held)
+        self.assertIsNone(line)
+
+    def test_a_search_that_gets_the_material_back_refuses_the_claim(self):
+        """The engine answers with a line that wins the piece straight back,
+        so 'wins a piece' must not be printed."""
+        root = chess.Board("4k3/8/8/3n4/8/8/8/3QK3 w - - 0 1")
+        after = root.copy(stack=False)
+        after.push(chess.Move.from_uci("d1d5"))
+
+        def ask(fen, depth):
+            # Their king walks over and takes the queen back.
+            return {"cp": 0, "mate": None, "pv": ["e8e7", "d5d6", "e7d6"]}
+
+        judge = explain.Judge(ask)
+        held, _ = judge.holds(root, after, chess.WHITE, 3)
+        self.assertFalse(held)
+
+    def test_a_level_evaluation_marks_the_material_as_hollow(self):
+        judge = explain.Judge(lambda fen, d: None)
+        self.assertTrue(judge.drawish({"cp": 10, "mate": None, "pv": []}))
+        self.assertFalse(judge.drawish({"cp": 400, "mate": None, "pv": []}))
+        self.assertFalse(judge.drawish({"cp": None, "mate": 3, "pv": []}))
+
+
 class MateFlip(unittest.TestCase):
     """A side being mated sits at 0.0 win probability. Zero is falsy, and
     the flip once read it as 'no evaluation' and handed back 50%: a forced

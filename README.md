@@ -68,6 +68,19 @@ Exchanges are counted through to the end with a static exchange evaluation,
 forced replies are counted by listing the legal ones, and a claim is only
 made when the position can be checked for it.
 
+Every claim is checked twice. The static tests propose it, and a search has
+to agree before it is printed: over 120 random positions the engine rejected
+or softened a claim in 21 of them, mostly moves whose "point" evaporates once
+the opponent gets a real answer. A claim the engine contradicts is either
+dropped or stated as what it is ("the exchange count says you come out a
+piece up; the engine has an answer that gets it back"). Material in an ending
+it cannot win with is called that, not called winning.
+
+The reasoning for your own mistakes is worked out during `./run review`,
+where there is time to search, and stored. The panel reads it back instead of
+recomputing in the half second it has, and the game view shows it under any
+move of yours the engine disagreed with.
+
 What it will tell you, when it is true:
 
 - **The tactic**, named with its pieces: what forks what, what is pinned to
@@ -87,6 +100,14 @@ What it will tell you, when it is true:
   that goes from three squares to eight.
 - **The runner-up**, quantified: the engine's second choice, how far behind it
   is in win probability, and what happens in its line.
+
+Accuracy is measured rather than asserted. `verify_claim()` re-derives every
+claim from the position it names — pieces on those squares, on one ray, in
+that order, nothing in between, the exchange worth the number quoted — and
+the sweep runs clean over hundreds of engine positions. The test suite mirrors
+each position, colours and ranks flipped, and requires the explanation to be
+the mirror image of itself, which is what catches a perspective bug before you
+see it.
 
 ## The panel
 

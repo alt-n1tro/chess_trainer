@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import chess
 import chess.pgn
 
-from . import corpus, db, drills, engine, jobs, review, stats
+from . import corpus, db, drills, engine, explain, jobs, review, stats
 from .drills import Drill
 
 WEB_DIR = os.path.join(db.ROOT, "web")
@@ -377,6 +377,18 @@ class Trainer:
             row = conn.execute("SELECT * FROM games WHERE id=?", (ids[0],)).fetchone()
         return self._load_row(row)
 
+    def _stored_why(self, move: dict, best_uci: str):
+        """What review concluded about the engine's move in this position."""
+        try:
+            board = chess.Board(move["fen_before"])
+            items = explain.stored(self.conn_t(),
+                                   db.pos_hash(board, move.get("phase")),
+                                   best_uci, self.pool.version,
+                                   min_depth=explain.JUDGE_DEPTH)
+        except (ValueError, KeyError):
+            return None
+        return [i["text"] for i in items][:3] if items else None
+
     def _load_row(self, row) -> dict:
         conn = self.conn_t()
         game = chess.pgn.read_game(io.StringIO(row["pgn"]))
@@ -416,6 +428,10 @@ class Trainer:
                     m["best_san"] = b.san(chess.Move.from_uci(r["best"])) if r["best"] else None
                 except (ValueError, AssertionError):
                     m["best_san"] = r["best"]
+                # The reasoning worked out during review, where there was time
+                # to check it against a search.
+                if r["is_me"] and r["best"] and r["best"] != m["uci"]:
+                    m["why"] = self._stored_why(m, r["best"])
         rev = conn.execute("SELECT accuracy, depth FROM reviews WHERE game_id=?",
                            (row["id"],)).fetchone()
         self.game = {

@@ -540,6 +540,28 @@ class Drill:
         lines = self.my_lines()
         return lines[0] if lines else None
 
+    def _judge(self) -> explain_mod.Judge:
+        """The engine opinion the explanation's claims have to survive. It
+        goes through the same cache as everything else, so the positions the
+        warmer has already seen cost nothing."""
+        def ask(fen: str, depth: int):
+            board = chess.Board(fen)
+            if board.is_game_over(claim_draw=True):
+                return None
+            lines = self.pool.analyse(board, depth, 1,
+                                      phase=db.classify_phase(board))
+            return lines[0] if lines else None
+
+        return explain_mod.Judge(ask)
+
+    def _stored_reasons(self, rs, best_uci: str):
+        """The explanation worked out during review, if this position was one
+        of yours. It was checked at leisure, so it is better than anything
+        that can be computed while you wait."""
+        return explain_mod.stored(self.conn, rs["hash"], best_uci,
+                                  self.pool.version,
+                                  min_depth=explain_mod.JUDGE_DEPTH)
+
     def _eval_after(self, board: chess.Board, move: chess.Move):
         """What the position is worth to you once this move is played.
 
@@ -596,6 +618,8 @@ class Drill:
             {"mine": [move.uci()] + (mine.get("pv") or []),
              "best": [best_move.uci()] + (best_eval.get("pv") or []),
              "alts": _alternatives(lines, move.uci())},
+            judge=self._judge(),
+            reasons=self._stored_reasons(rs, best_move.uci()),
         )
 
         my_node = tree_touch(self.conn, self.root_hash, rs["node_id"],
@@ -688,6 +712,8 @@ class Drill:
                 rs["fen"], None, best["move"],
                 {"mine": [], "best": [move.uci()] + (best_eval.get("pv") or []),
                  "alts": _alternatives(self.my_lines(), None)},
+                judge=self._judge(),
+                reasons=self._stored_reasons(rs, best["move"]),
             ).to_json(),
         }
         # The move you were shown is played, so a chain carries on from it.

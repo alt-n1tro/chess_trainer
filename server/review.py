@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 import chess
 import chess.pgn
 
-from . import db, grading, themes
+from . import db, explain as explain_mod, grading, themes
 from . import engine
 from .engine import with_wp
 
@@ -143,6 +143,13 @@ def review_game(conn, pool, row, depth: int = REVIEW_DEPTH, progress=None,
                                  reply.get("pv"),
                                  reply.get("mate") if (reply.get("mate") or 0) > 0 else None)
         acc = move_accuracy(delta)
+        # Work the explanation out here, where there is time to check it
+        # against a search, rather than in the half second a drill has. The
+        # positions worth the effort are the ones you will be asked about:
+        # where it was your move, and where the engine wanted something else.
+        if mover == me and best_uci and best_uci != move.uci():
+            _explain_here(conn, pool, board, before, phase, depth)
+
         if mover == me:
             my_acc.append(acc)
             wp = engine.wp_or_even(before.get("wp"))
@@ -171,6 +178,52 @@ def review_game(conn, pool, row, depth: int = REVIEW_DEPTH, progress=None,
     )
     conn.commit()
     return {"game_id": row["id"], "accuracy": accuracy, "plies": len(moves)}
+
+
+def _explain_here(conn, pool, board, before: dict, phase: str,
+                  depth: int) -> None:
+    """Explain the engine's move in this position and keep it.
+
+    The drill panel reads this back instead of recomputing, so the reasoning
+    you are shown was checked against a real search and not a half-second
+    guess. Failures are swallowed: an explanation is never worth losing a
+    review over.
+    """
+    best_uci = before.get("move")
+    try:
+        # Two lines, so the explanation can say what the runner-up was worth.
+        lines = pool.analyse(board, explain_mod.JUDGE_DEPTH, 2, slot="bg",
+                             phase=phase) or []
+        alts = []
+        if len(lines) > 1 and lines[0].get("wp") is not None:
+            alts = [{"move": l["move"], "pv": l.get("pv") or [],
+                     "gap": round(lines[0]["wp"] - l["wp"], 1)}
+                    for l in lines[1:2]]
+        judge = explain_mod.Judge(
+            lambda fen, d: _one_line(pool, fen, d), depth=explain_mod.JUDGE_DEPTH)
+        root = board.copy(stack=False)
+        pv = list(before.get("pv") or [])
+        if not pv or pv[0] != best_uci:
+            pv = [best_uci] + pv
+        walked, sans, walked_boards = explain_mod._walk(root.fen(), pv,
+                                                        explain_mod.PV_PLIES)
+        items = explain_mod.why_best(
+            root, chess.Move.from_uci(best_uci), sans, walked_boards, root.turn,
+            line=pv, alts=alts, judge=judge)
+        explain_mod.store(conn, db.pos_hash(board, phase), best_uci,
+                          explain_mod.JUDGE_DEPTH, pool.version, items)
+    except Exception:
+        return
+
+
+def _one_line(pool, fen: str, depth: int):
+    """One engine line for the judge, from the cache where possible."""
+    board = chess.Board(fen)
+    if board.is_game_over(claim_draw=True):
+        return None
+    phase = db.classify_phase(board)
+    lines = pool.analyse(board, depth, 1, slot="bg", phase=phase)
+    return lines[0] if lines else None
 
 
 def pending(conn, depth: int = REVIEW_DEPTH, limit: int | None = None,
