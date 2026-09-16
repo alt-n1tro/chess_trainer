@@ -94,6 +94,25 @@ class Judge:
         settled = min(seen[-2:]) if len(seen) > 1 else seen[-1]
         return settled >= base + gain, line
 
+    def settles(self, after: chess.Board, me: bool):
+        """Where the material count settles in the engine's own line from
+        here, counted from your side. None when there is no engine."""
+        line = self.line(after)
+        if not line:
+            return None
+        board = after.copy(stack=False)
+        seen = [_material(board, me)]
+        for uci in (line.get("pv") or [])[:JUDGE_PLIES]:
+            try:
+                move = chess.Move.from_uci(uci)
+            except ValueError:
+                break
+            if move not in board.legal_moves:
+                break
+            board.push(move)
+            seen.append(_material(board, me))
+        return min(seen[-2:]) if len(seen) > 1 else seen[-1]
+
     def drawish(self, line) -> bool:
         """The engine calling a position level, whatever the piece count says.
         This is what catches a rook pawn with the wrong bishop, a fortress, or
@@ -857,11 +876,11 @@ def _claim_capture(root, move, san, after, me, gain, where, name, outcome,
             # Say that, rather than the thing that is not true.
             return _claim(
                 "capture",
-                f"{san} takes the {victim} on {where}, and counting the"
-                f" exchange on that square alone says you come out"
-                f" {_worth(gain)} up. The engine does not agree: it has an"
-                f" answer that gets the material back, and the line below is"
-                f" where to look for it.",
+                f"{san} takes the {victim} on {where}. The exchange on that"
+                f" square counts {_worth(gain)} in your favour, but the"
+                f" engine's own line does not keep all of it: some goes back"
+                f" for what the position gives you instead. Walk the line"
+                f" below to see what it is buying.",
                 root, move=move.uci(), victim=victim, square=where, gain=gain,
                 engine_confirmed=False)
         drawn = judge.drawish(line) or _cannot_mate(after, me)
@@ -895,11 +914,13 @@ def _claim_capture(root, move, san, after, me, gain, where, name, outcome,
             f" next.{back}",
             root, move=move.uci(), victim=victim, square=where, gain=gain)
     extra = _trade_gain(root, move, after, me)
+    same = name == victim
+    swap = (f"{san} is an even trade on {where}" if same
+            else f"{san} trades your {name} for their {victim} on {where}")
     return _claim(
         "trade",
-        f"{san} trades the {name} for the {victim} on {where}. The count comes"
-        f" out level, so this is a decision about which pieces stay on the"
-        f" board rather than a way of winning material{extra}.",
+        f"{swap}. Nothing is won or lost on the count, so the move is about"
+        f" which pieces stay on the board{extra}.",
         root, move=move.uci(), victim=victim, square=where, gain=0)
 
 
@@ -1204,10 +1225,10 @@ def _narrate(root: chess.Board, steps, me: bool) -> list[dict]:
             out.append(_claim("line", gained, end, structural=True))
     if swing > 0 and len(out) < 3:
         moves = (len(steps) + 1) // 2
-        out.append(_claim("line", f"{moves} moves into the line the engine"
-                          f" shows, the count is {_worth(swing)} in your"
-                          f" favour. That is as far as it was searched, not a"
-                          f" promise about the rest of the game.", end,
+        out.append(_claim("line", f"{_spell(moves)} moves in, you are"
+                          f" {_worth(swing)} up. That is as far as the search"
+                          f" went, not a promise about the rest of the game.",
+                          end,
                           swing=swing, horizon=len(steps)))
     return out
 
@@ -1226,13 +1247,13 @@ def _structure_gain(root, end, me) -> str:
     pair_before = len(root.pieces(chess.BISHOP, me)) - len(root.pieces(chess.BISHOP, not me))
     pair_after = len(end.pieces(chess.BISHOP, me)) - len(end.pieces(chess.BISHOP, not me))
     if pair_after > pair_before and len(end.pieces(chess.BISHOP, me)) == 2:
-        return ("The material comes out level, but at the end of the line the"
-                " engine shows, you have both bishops and they do not.")
+        return ("The material comes out level. What you keep is the pair of"
+                " bishops, and they do not.")
     shield_before = _shield(root, not me)
     shield_after = _shield(end, not me)
     if shield_after < shield_before:
-        return (f"Material stays level, but at the end of the line the engine"
-                f" shows, their king has {shield_after} pawn"
+        return (f"Material stays level. What changes is their king: by the"
+                f" end of the line it has {shield_after} pawn"
                 f"{'' if shield_after == 1 else 's'} in front of it instead of"
                 f" {shield_before}.")
     return ""
@@ -1549,8 +1570,8 @@ def _runner_up(root: chess.Board, alts: list[dict], me: bool):
             if swing < 0:
                 tail = f": they answer {reply} and you end up {_worth(-swing)} down."
             elif swing == 0:
-                tail = (f": they answer {reply}, the material is unchanged, and"
-                        f" the position has stopped being about anything.")
+                tail = (f": they answer {reply}, nothing has been won or lost,"
+                        f" and the position goes quiet.")
             else:
                 tail = (f". That move wins material too, so the difference is"
                         f" not the count: the position this one leaves behind"
@@ -1733,6 +1754,345 @@ CHECKS = (
 )
 
 
+# --- what your move cost ---------------------------------------------------
+#
+# The other half of the explanation, built the same way: claims with facts,
+# each about a position it names, each checked before it is printed. The rule
+# that matters here is that every sentence says who plays what. "It costs the
+# knight after 11" tells you nothing; "they answer 11.exd5 and the knight on
+# d7 falls" tells you what happened and whose move did it.
+
+
+def _their_reply(steps):
+    """Their answer to your move: the first move of the line after it."""
+    return steps[1] if len(steps) > 1 else None
+
+
+def _mated_side(board: chess.Board):
+    return board.turn if board.is_checkmate() else None
+
+
+def _cost_mate(root, my_san, steps, me):
+    """Your move allows mate. Nothing else about it matters."""
+    for i, (move, san, before, after) in enumerate(steps):
+        if _mated_side(after) == me:
+            moves = (i + 1) // 2
+            first = steps[1][1] if len(steps) > 1 else san
+            return _claim(
+                "allows_mate",
+                f"{my_san} allows mate. They start with {_numbered(root, 1, first)}"
+                f" and it is over in {_spell(moves)} more move"
+                f"{'' if moves == 1 else 's'} — the line is below, and every"
+                f" answer you have is in it.",
+                root, my_move=my_san, mate_in=moves)
+    return None
+
+
+def _numbered(root: chess.Board, idx: int, san: str) -> str:
+    """A move written the way a player writes it: 11.exd5, or 11...Nf6. The
+    number is attached to the move, never left floating in a sentence."""
+    ply = root.ply() + idx
+    number = ply // 2 + 1
+    return f"{number}.{san}" if ply % 2 == 0 else f"{number}...{san}"
+
+
+def _loss_in_line(root, steps, me):
+    """Where in their line the material actually goes, and to which move.
+
+    Returns (their move, what it takes, where, how far behind you end up), or
+    None when nothing is lost.
+    """
+    base = _material(root, me)
+    if not steps:
+        return None
+    seen = [_material(b, me) for (_, _, _, b) in steps]
+    settled = min(seen[-2:]) if len(seen) > 1 else seen[-1]
+    if settled >= base:
+        return None
+    for i, (move, san, before, after) in enumerate(steps):
+        if i % 2 == 0:
+            continue                       # your moves do not take from you
+        if _material(after, me) >= _material(before, me):
+            continue
+        victim = before.piece_at(move.to_square)
+        if victim is None or victim.color != me:
+            continue
+        return {"idx": i, "san": san, "victim": NAMES[victim.piece_type],
+                "square": chess.square_name(move.to_square),
+                "swing": base - settled, "before": before, "after": after}
+    return None
+
+
+def _cost_material(root, my_move, my_san, steps, me, judge):
+    """Your move loses material, and their line is where it goes."""
+    loss = _loss_in_line(root, steps, me)
+    if loss is None:
+        return None
+    after_mine = steps[0][3] if steps else None
+    if after_mine is not None and judge is not None:
+        # The loss has to be one a search actually plays out.
+        settled = judge.settles(after_mine, me)
+        if settled is not None and settled >= _material(root, me):
+            return None                    # the engine keeps the material
+    where = loss["square"]
+    reply = _numbered(root, loss["idx"], loss["san"])
+    if loss["idx"] == 1:
+        # They take it straight away, so the claim is about the board you are
+        # looking at: the piece is hanging right now.
+        undefended = _undefended(loss["before"], where)
+        moved_there = my_move.to_square == chess.parse_square(where)
+        if moved_there:
+            lead = (f"{my_san} puts the {loss['victim']} on {where} where it"
+                    f" cannot stay.")
+        elif undefended:
+            lead = (f"{my_san} leaves the {loss['victim']} on {where} with"
+                    f" nothing defending it.")
+        else:
+            lead = f"{my_san} loses the {loss['victim']} on {where}."
+        victim_value = VALUES[{v: k for k, v in NAMES.items()}[loss["victim"]]]
+        if abs(victim_value - loss["swing"]) >= 1:
+            text = (f"{lead} They take it at once with {reply}. You win"
+                    f" something back, but when the exchanges stop you are"
+                    f" still {_worth(loss['swing'])} down.")
+        else:
+            text = (f"{lead} They take it at once with {reply}, and you are"
+                    f" {_worth(loss['swing'])} down.")
+    else:
+        # It goes wrong further in. Saying "the bishop on d2" about a bishop
+        # that is not on d2 yet is how an explanation stops making sense, so
+        # the sentence says where in the line this happens.
+        moves_in = (loss["idx"] + 2) // 2
+        first = steps[1][1] if len(steps) > 1 else loss["san"]
+        text = (f"The problem is not immediate. They answer"
+                f" {_numbered(root, 1, first)}, and {_spell(moves_in)} moves"
+                f" into the line the {loss['victim']} on {where} falls to"
+                f" {reply}, leaving you {_worth(loss['swing'])} down. Walk the"
+                f" line below and you can see it coming.")
+    return _claim(
+        "material", text, root, my_move=my_san, their_move=loss["san"],
+        victim=loss["victim"], square=where, swing=loss["swing"],
+        ply=loss["idx"])
+
+
+def _cost_threat(root, my_move, my_san, after_mine, me, theirs):
+    """Their idea was already on the board and your move ignored it."""
+    if not theirs:
+        return None
+    still = best_shot(after_mine, not me)
+    if still is None or still["gain"] < theirs["gain"]:
+        return None
+    if theirs["mate"]:
+        return _claim(
+            "ignored",
+            f"They were threatening {theirs['san']}, which is mate, and"
+            f" {my_san} does nothing about it.",
+            root, my_move=my_san, their_move=theirs["san"])
+    return _claim(
+        "ignored",
+        f"They were already threatening {theirs['san']}, winning"
+        f" {_worth(theirs['gain'])}. {my_san} does not stop it, so they play"
+        f" it.",
+        root, my_move=my_san, their_move=theirs["san"], gain=theirs["gain"])
+
+
+def _cost_allows(root, my_san, best_san, after_mine, after_best, me):
+    """Nothing hung, but your move handed them something the engine's move
+    did not. This is the most useful thing to say about a quiet mistake: not
+    that the position is worth less, but what they get to do."""
+    if after_best is None:
+        return None
+    theirs = best_shot(after_mine, not me)
+    if theirs is None:
+        return None
+    theirs_best = best_shot(after_best, not me)
+    if theirs_best is not None and theirs_best["gain"] >= theirs["gain"]:
+        return None                      # they had it either way
+    if theirs["mate"]:
+        return _claim(
+            "allows",
+            f"{my_san} gives them {theirs['san']}, and that is mate."
+            f" {best_san} does not allow it.",
+            after_mine, their_move=theirs["san"], mate=True)
+    return _claim(
+        "allows",
+        f"Nothing hangs immediately, but {my_san} lets them play"
+        f" {theirs['san']}, which wins {_worth(theirs['gain'])}. After"
+        f" {best_san} that move is not there — that is the whole difference"
+        f" between the two.",
+        after_mine, their_move=theirs["san"], gain=theirs["gain"])
+
+
+def _cost_missed_mate(root, my_san, best_san, best_boards, me):
+    """You had a forced mate and played something else."""
+    if not best_boards or not best_boards[-1].is_checkmate():
+        return None
+    moves = (len(best_boards) + 1) // 2
+    return _claim(
+        "missed_mate",
+        f"There was mate in {_spell(moves)} in this position and {my_san} lets"
+        f" the game go on. The mating move was the one to find here, not the"
+        f" best practical try.",
+        root, my_move=my_san, mate_in=moves)
+
+
+def _cost_trapped(root, me, mine_end, best_end, my_san):
+    for pt in (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT):
+        for sq in mine_end.pieces(pt, me):
+            if _safe_squares(mine_end, sq, me) > 0:
+                continue
+            # A piece that had nowhere to go in the first place has not been
+            # trapped by anything: an undeveloped rook is not a lesson.
+            if sq in root.pieces(pt, me) and _safe_squares(root, sq, me) < 2:
+                continue
+            if not any(_safe_squares(best_end, s, me) > 0
+                       for s in best_end.pieces(pt, me)):
+                continue
+            # No squares is only bad news when something is coming for it.
+            if not mine_end.attackers(not me, sq):
+                continue
+            return _claim(
+                "trapped",
+                f"Follow the line and your {NAMES[pt]} ends on"
+                f" {chess.square_name(sq)} with no safe square to go to. It is"
+                f" not lost yet, but it has stopped being a piece.",
+                mine_end, piece=NAMES[pt], square=chess.square_name(sq))
+    return None
+
+
+def _cost_king(root, me, mine_end, best_end, my_san):
+    # In a position with no pawn cover to speak of there is no shelter to
+    # lose, and "it opens a file at your king" is true of every file.
+    if len(mine_end.pieces(chess.PAWN, me)) < 3:
+        return None
+    # Shelter matters when there is something to attack with.
+    if not (mine_end.pieces(chess.QUEEN, not me)
+            or len(mine_end.pieces(chess.ROOK, not me)) >= 1):
+        return None
+    mine_shield, best_shield = _shield(mine_end, me), _shield(best_end, me)
+    if mine_shield < best_shield:
+        return _claim(
+            "king",
+            f"By the end of the line your king has {mine_shield} pawn"
+            f"{'' if mine_shield == 1 else 's'} in front of it where the"
+            f" engine's move keeps {best_shield}. That is the difference: the"
+            f" material is the same, the king is not.",
+            mine_end, shield=mine_shield)
+    if _open_files_at_king(mine_end, me) > _open_files_at_king(best_end, me):
+        return _claim(
+            "king",
+            "The line opens a file straight at your king that the engine's"
+            " move keeps shut.",
+            mine_end)
+    return None
+
+
+def _cost_mate_speed(root, my_san, best_san, mate_mine, mate_best):
+    """Both moves win, but one mates sooner. In an endgame that is usually
+    the whole difference, and it is a number rather than an opinion."""
+    if not mate_best or mate_best <= 0:
+        return None
+    if mate_mine and mate_mine > 0 and mate_mine <= mate_best:
+        return None
+    if mate_mine and mate_mine > 0:
+        return _claim(
+            "slower",
+            f"Both moves win. {best_san} mates in {_spell(mate_best)};"
+            f" after {my_san} it takes {_spell(mate_mine)}. Nothing is thrown"
+            f" away — you are simply giving them {_spell(mate_mine - mate_best)}"
+            f" more move{'' if mate_mine - mate_best == 1 else 's'} to live.",
+            root, my_move=my_san, mate_mine=mate_mine, mate_best=mate_best)
+    return _claim(
+        "slower",
+        f"{best_san} forces mate in {_spell(mate_best)} and {my_san} lets the"
+        f" game go on. The win is still there; the forced finish is not.",
+        root, my_move=my_san, mate_best=mate_best)
+
+
+def _cost_quiet(root, my_san, best_san, steps, wp_mine, wp_best):
+    """Nothing broke that the tests here can point at. Say that, with the
+    size of the difference, and never dress a big drop up as a small one."""
+    if wp_mine is None or wp_best is None:
+        return None
+    gap = wp_best - wp_mine
+    reply = steps[1][1] if len(steps) > 1 else None
+    if gap >= 8:
+        after = (f" They answer {reply}, and the line below is where the"
+                 f" difference shows." if reply else
+                 " The line below is where the difference shows.")
+        return _claim(
+            "quiet",
+            f"Nothing drops on the spot, so this is not a one-move mistake."
+            f" The engine still rates {best_san} {gap:.0f} points of win"
+            f" probability higher than {my_san}: {wp_best:.0f}% against"
+            f" {wp_mine:.0f}%.{after}",
+            root, my_move=my_san, wp_mine=round(wp_mine, 1),
+            wp_best=round(wp_best, 1))
+    return _claim(
+        "quiet",
+        f"Nothing falls apart after {my_san}: no piece drops and no attack"
+        f" lands. It is a question of degree. The engine's move keeps"
+        f" {wp_best:.0f}% where yours keeps {wp_mine:.0f}%, and over a game"
+        f" that difference is the whole of it.",
+        root, my_move=my_san, wp_mine=round(wp_mine, 1),
+        wp_best=round(wp_best, 1))
+
+
+def cost_claims(root: chess.Board, my_move: chess.Move, my_san: str,
+                best_san: str, mine_line: list[str], best_boards, me: bool,
+                judge=None, wp_mine=None, wp_best=None,
+                mate_mine=None, mate_best=None) -> list[dict]:
+    """What your move gave up, in the order that matters: mate first, then
+    material, then the threat you walked past, then position."""
+    steps = _steps(root.fen(), mine_line, PV_PLIES)
+    after_mine = steps[0][3] if steps else None
+    mine_end = steps[-1][3] if steps else root
+    best_end = best_boards[-1] if best_boards else root
+    out = []
+
+    mate = _cost_mate(root, my_san, steps, me)
+    if mate:
+        out.append(mate)
+    missed = _cost_missed_mate(root, my_san, best_san, best_boards, me)
+    if missed:
+        out.append(missed)
+    if not out:
+        slower = _cost_mate_speed(root, my_san, best_san, mate_mine, mate_best)
+        if slower:
+            out.append(slower)
+    if not out:
+        material = _cost_material(root, my_move, my_san, steps, me, judge)
+        if material:
+            out.append(material)
+    if after_mine is not None and len(out) < 2:
+        ignored = _cost_threat(root, my_move, my_san,
+                               after_mine, me, best_shot(root, not me))
+        already = {(c["facts"] or {}).get("their_move") for c in out}
+        if ignored and (ignored["facts"] or {}).get("their_move") in already:
+            # The threat and the loss are the same move. Lead with the threat,
+            # which is the more useful way round: it was there before you
+            # moved.
+            out = [ignored]
+        elif ignored:
+            out.append(ignored)
+    if len(out) < 2:
+        after_best = best_boards[0] if best_boards else None
+        allows = _cost_allows(root, my_san, best_san, after_mine, after_best, me)
+        if allows and (allows["facts"] or {}).get("their_move") not in {
+                (c["facts"] or {}).get("their_move") for c in out}:
+            out.append(allows)
+    if len(out) < 2:
+        for check in (_cost_trapped, _cost_king):
+            item = check(root, me, mine_end, best_end, my_san)
+            if item:
+                out.append(item)
+                break
+    if not out:
+        quiet = _cost_quiet(root, my_san, best_san, steps, wp_mine, wp_best)
+        if quiet:
+            out.append(quiet)
+    return out
+
+
 def explain(fen: str, my_move: str, best_move: str, pvs: dict,
             judge: "Judge | None" = None,
             reasons: list[dict] | None = None) -> Explanation:
@@ -1787,14 +2147,11 @@ def explain(fen: str, my_move: str, best_move: str, pvs: dict,
         out.text = " ".join(r["text"] for r in reasons[:2])
         return out
 
-    cost = []
-    for check in CHECKS:
-        item = check(root, me, mine_end, best_end, mine_boards, best_boards,
-                     mine_sans, best_sans)
-        if item:
-            cost.append(item)
-        if len(cost) >= MAX_ITEMS:
-            break
+    cost = cost_claims(root, chess.Move.from_uci(mine_line[0]), mine_sans[0],
+                       best_sans[0], mine_line, best_boards, me, judge=judge,
+                       wp_mine=pvs.get("wp_mine"), wp_best=pvs.get("wp_best"),
+                       mate_mine=pvs.get("mate_mine"),
+                       mate_best=pvs.get("mate_best"))[:MAX_ITEMS]
 
     # What yours cost first -- it is the answer to "what did I miss" -- then
     # why theirs works.

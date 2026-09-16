@@ -632,7 +632,9 @@ class Drill:
             rs["fen"], move.uci(), best_move.uci(),
             {"mine": [move.uci()] + (mine.get("pv") or []),
              "best": [best_move.uci()] + (best_eval.get("pv") or []),
-             "alts": _alternatives(lines, move.uci())},
+             "alts": _alternatives(lines, move.uci()),
+             "wp_mine": mine.get("wp"), "wp_best": best_eval.get("wp"),
+             "mate_mine": mine.get("mate"), "mate_best": best_eval.get("mate")},
             judge=self._judge(),
             reasons=kept,
         )

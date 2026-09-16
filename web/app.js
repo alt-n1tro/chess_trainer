@@ -248,9 +248,15 @@ async function renderDrill(d) {
 
   const a = d.answer;
   selected = null;
+  // Once you ask for the engine's move, the board goes back to the position
+  // you were asked about and shows that move alone. An arrow drawn over the
+  // position your own move already made starts from a square its piece has
+  // left, which is worse than no arrow at all.
+  const showingBest = !!a && d.done && a.verdict !== "best" && a.best_move
+                      && bestIsOut(d);
   const key = `${d.node_id_current}|${d.opp_move}|${d.round}` +
-              `|${d.depth_level}|${d.step || 1}`;
-  const target = d.done && a ? a.fen_after : d.fen;
+              `|${d.depth_level}|${d.step || 1}|${showingBest ? "best" : ""}`;
+  const target = showingBest ? d.fen : (d.done && a ? a.fen_after : d.fen);
 
   board.disableMoveInput();
   await orient(d.my_colour === "black" ? COLOR.black : COLOR.white);
@@ -271,13 +277,17 @@ async function renderDrill(d) {
   }
   shownKey = key;
 
-  markers(markersFor(d), true);
   board.removeArrows();
-  // The arrow is the answer, so it waits until you have asked for it.
-  if (a && d.done && a.verdict !== "best" && a.best_move && bestIsOut(d)) {
+  if (showingBest) {
+    // One thing on the board: the move you were looking for, from the square
+    // it starts on, in the position where it had to be found. Your own move
+    // is not drawn here — it is not on this board.
+    markers([[d.opp_move.slice(0, 2), MARKER_MOVE],
+             [d.opp_move.slice(2, 4), MARKER_MOVE]], true);
     board.addArrow(ARROW_BEST, a.best_move.slice(0, 2), a.best_move.slice(2, 4));
-    markers([[a.best_move.slice(0, 2), MARKER_BEST],
-             [a.best_move.slice(2, 4), MARKER_BEST]], false);
+    markers([[a.best_move.slice(2, 4), MARKER_BEST]], false);
+  } else {
+    markers(markersFor(d), true);
   }
 
   document.body.dataset.turn = d.my_colour;
@@ -291,7 +301,10 @@ async function renderDrill(d) {
   el.status.textContent = d.can_answer
     ? (reply ? `They answered ${reply}. Your move.${more}`
              : `They played ${d.opp_san}${asPlayed}. Your move.${more}`)
-    : (a ? `You played ${a.my_san || "—"}.` : `They played ${d.opp_san}${asPlayed}.`);
+    : showingBest
+      ? `Back at the position you had to solve: ${a.best_san} was the move.`
+      : (a ? `You played ${a.my_san || "—"}.`
+           : `They played ${d.opp_san}${asPlayed}.`);
 
   renderContext(d);
   renderProgress(d);

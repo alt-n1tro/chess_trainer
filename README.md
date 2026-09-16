@@ -72,6 +72,17 @@ left to spoil.
 The two explanations are kept apart because they answer different questions:
 what your move gave up, and why the engine's move works.
 
+Revealing the engine's move puts the board back to the position you were
+asked about and draws that one move on it. Your own move is not drawn there:
+an arrow starting from a square your piece has already left is worse than no
+arrow at all.
+
+Both halves follow the same rule about moves. A move number is only ever
+written attached to its move — "they answer 13...Qxd5" — and a loss that
+happens deeper in the line says so rather than describing a piece as hanging
+on a board where it is not. "It costs the knight after 11" is exactly the
+sentence this rule exists to prevent.
+
 ## Why the move is the move
 
 Every verdict comes with an explanation of the engine's move, whether you

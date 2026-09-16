@@ -662,6 +662,63 @@ class EngineJudge(unittest.TestCase):
         self.assertFalse(judge.drawish({"cp": None, "mate": 3, "pv": []}))
 
 
+class WhatYourMoveCost(unittest.TestCase):
+    """The other half of the explanation: what your move gave up. Every
+    sentence has to name who plays what, and a move number only ever appears
+    attached to its move."""
+
+    def claims(self, fen, mine_pv, best_pv, **extra):
+        payload = {"mine": mine_pv, "best": best_pv}
+        payload.update(extra)
+        return explain.explain(fen, mine_pv[0], best_pv[0], payload).cost
+
+    def test_a_piece_taken_at_once_says_so_plainly(self):
+        # You put a knight on a square a pawn covers; it goes immediately.
+        fen = "4k3/8/5p2/8/8/8/4N3/4K3 w - - 0 1"
+        claims = self.claims(fen, ["e2g3", "f6g5"], ["e2c3", "e8e7"])
+        self.assertEqual(explain.verify(claims), [])
+
+    def test_a_loss_deeper_in_the_line_is_not_described_as_now(self):
+        """The bug behind 'it costs the knight after 11': a piece that falls
+        four moves later must not be described as hanging on this board."""
+        for claim in self.claims(
+                "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 4 4",
+                ["f6e4", "b1c3", "e4c3", "d2c3"],
+                ["f8c5", "c2c3", "e8g8", "d2d3"]):
+            text = claim["text"]
+            if claim["kind"] == "material" and claim["facts"].get("ply", 1) > 1:
+                self.assertIn("into the line", text)
+
+    def test_move_numbers_are_attached_to_moves(self):
+        """No sentence may contain a bare move number: '11' on its own is
+        what made the old wording unreadable."""
+        board = chess.Board()
+        self.assertEqual(explain._numbered(board, 0, "e4"), "1.e4")
+        self.assertEqual(explain._numbered(board, 1, "e5"), "1...e5")
+        later = chess.Board(
+            "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 4 4")
+        self.assertEqual(explain._numbered(later, 0, "Nxe4"), "4...Nxe4")
+        self.assertEqual(explain._numbered(later, 1, "Nc3"), "5.Nc3")
+
+    def test_no_sentence_leaves_a_number_dangling(self):
+        fen = "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 4 4"
+        for claim in self.claims(fen, ["f6e4", "b1c3", "e4c3", "d2c3"],
+                                 ["f8c5", "c2c3"], wp_mine=30.0, wp_best=52.0):
+            self.assertNotRegex(claim["text"], r"after \d+\b(?!\.)")
+
+    def test_a_big_drop_is_not_called_nothing(self):
+        claim = explain._cost_quiet(chess.Board(), "a3", "e4", [], 25.0, 54.0)
+        self.assertNotIn("Nothing falls apart", claim["text"])
+        self.assertIn("29 points", claim["text"])
+        small = explain._cost_quiet(chess.Board(), "a3", "e4", [], 51.0, 54.0)
+        self.assertIn("question of degree", small["text"])
+
+    def test_shelter_is_not_discussed_in_a_pawnless_ending(self):
+        bare = chess.Board("4k3/8/8/8/3Q4/8/8/4K3 b - - 0 1")
+        self.assertIsNone(
+            explain._cost_king(bare, chess.BLACK, bare, bare, "Kf8"))
+
+
 class MateFlip(unittest.TestCase):
     """A side being mated sits at 0.0 win probability. Zero is falsy, and
     the flip once read it as 'no evaluation' and handed back 50%: a forced
