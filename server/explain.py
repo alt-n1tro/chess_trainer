@@ -34,7 +34,9 @@ NAMES = {
 }
 
 
-JUDGE_DEPTH = 12          # what a claim is checked at, when an engine is there
+JUDGE_DEPTH = 20          # what a claim is checked at: the same depth as
+                          # everything else, so the search that confirms a
+                          # claim is the search that graded the move
 JUDGE_PLIES = 10          # how far into its answer we follow the material
 DRAWISH_CP = 60           # inside this, the engine is calling it level
 
@@ -1759,6 +1761,9 @@ def explain(fen: str, my_move: str, best_move: str, pvs: dict,
     if reasons is None:
         reasons = why_best(root, best_first, best_sans, best_boards, me,
                            line=best_line, alts=pvs.get("alts"), judge=judge)
+    # Set as a plain attribute, not a dataclass field: the client already has
+    # these inside `items` and does not need them twice.
+    out.why_claims = [dict(r) for r in reasons]
 
     if my_move and best_move and my_move == best_move:
         out.items = [dict(r) for r in reasons]

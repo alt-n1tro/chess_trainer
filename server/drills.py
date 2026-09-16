@@ -555,12 +555,26 @@ class Drill:
         return explain_mod.Judge(ask)
 
     def _stored_reasons(self, rs, best_uci: str):
-        """The explanation worked out during review, if this position was one
-        of yours. It was checked at leisure, so it is better than anything
-        that can be computed while you wait."""
+        """The explanation worked out earlier -- during review, or the last
+        time this position came up -- for the same move at the same depth."""
         return explain_mod.stored(self.conn, rs["hash"], best_uci,
                                   self.pool.version,
                                   min_depth=explain_mod.JUDGE_DEPTH)
+
+    def _keep_reasons(self, rs, best_uci: str, exp) -> None:
+        """Keep what was just worked out. The searches behind it are cached
+        already; this saves rebuilding the sentences, and means a position
+        that comes round again is explained in the same words."""
+        claims = getattr(exp, "why_claims", None)
+        if not claims:
+            return
+        try:
+            explain_mod.store(self.conn, rs["hash"], best_uci,
+                              explain_mod.JUDGE_DEPTH, self.pool.version,
+                              claims)
+            self.conn.commit()
+        except Exception:
+            pass
 
     def _eval_after(self, board: chess.Board, move: chess.Move):
         """What the position is worth to you once this move is played.
@@ -613,14 +627,17 @@ class Drill:
         result = grading.grade(best_eval, mine, rank)
 
         best_san = board.san(best_move)
+        kept = self._stored_reasons(rs, best_move.uci())
         exp = explain_mod.explain(
             rs["fen"], move.uci(), best_move.uci(),
             {"mine": [move.uci()] + (mine.get("pv") or []),
              "best": [best_move.uci()] + (best_eval.get("pv") or []),
              "alts": _alternatives(lines, move.uci())},
             judge=self._judge(),
-            reasons=self._stored_reasons(rs, best_move.uci()),
+            reasons=kept,
         )
+        if kept is None:
+            self._keep_reasons(rs, best_move.uci(), exp)
 
         my_node = tree_touch(self.conn, self.root_hash, rs["node_id"],
                              move.uci(), after, self.depth_level, after_phase)
@@ -697,6 +714,15 @@ class Drill:
         rs["steps"].append("shown")
         self.results[self.index] = _worst(rs["steps"])
         best_san = board.san(move)
+        kept = self._stored_reasons(rs, best["move"])
+        shown_exp = explain_mod.explain(
+            rs["fen"], None, best["move"],
+            {"mine": [], "best": [move.uci()] + (best_eval.get("pv") or []),
+             "alts": _alternatives(self.my_lines(), None)},
+            judge=self._judge(), reasons=kept,
+        )
+        if kept is None:
+            self._keep_reasons(rs, best["move"], shown_exp)
         my_node = tree_touch(self.conn, self.root_hash, rs["node_id"],
                              move.uci(), after, self.depth_level,
                              db.classify_phase(after))
@@ -708,13 +734,7 @@ class Drill:
             "delta_wp": None, "delta_cp": None, "tone": "shown",
             "step": rs["step"], "chain": self.chain, "my_node": my_node,
             "fen_after": after.fen(),
-            "explanation": explain_mod.explain(
-                rs["fen"], None, best["move"],
-                {"mine": [], "best": [move.uci()] + (best_eval.get("pv") or []),
-                 "alts": _alternatives(self.my_lines(), None)},
-                judge=self._judge(),
-                reasons=self._stored_reasons(rs, best["move"]),
-            ).to_json(),
+            "explanation": shown_exp.to_json(),
         }
         # The move you were shown is played, so a chain carries on from it.
         self._advance(rs, after, best_eval, my_node)

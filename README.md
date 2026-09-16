@@ -37,7 +37,7 @@ ever installed with sudo; if a step would need root, the app stops and says so.
 | `./run web` | Start the app on 127.0.0.1:8770. Open Firefox yourself. |
 | `./run import --player <name>` | Import a chess.com player's whole history. `--time-class rapid` by default; also `blitz`, `bullet`, `daily`, a comma-separated list, or `all`. `--since YYYY-MM` skips older months. Re-running picks up only what is new. |
 | `./run import <pgn-or-url>` | Import a PGN file, a chess.com game link, or an archive URL. |
-| `./run review` | Engine-review your games: every move graded and tagged for the statistics, and each reviewed game's positions added to the drill pools. `--depth` is a floor (16); simple positions go much deeper within `--budget` seconds. Resumable; run it again after each import. `--redo` re-grades every game from the cached analysis, for after a grading change. |
+| `./run review` | Engine-review your games: every move graded and tagged for the statistics, and each reviewed game's positions added to the drill pools. `--depth` is a floor (20, the same depth your drills are graded at); simple positions go much deeper within `--budget` seconds. Resumable; run it again after each import. `--redo` re-grades every game from the cached analysis, for after a grading change. |
 | `./run warm` | Pre-analyse pooled positions so drills never wait. |
 | `./run verify [--positions N]` | Check the app's moves against a second, deeper Stockfish process with no cache: the opponent's options, the reply it calls best, a graded reply, a chain step, and a reviewed move of yours. Prints every disagreement and how big it is. About a minute per position. |
 | `./run whoami [name]` | Show or set which chess.com name is you. `import --player` sets it the first time. |

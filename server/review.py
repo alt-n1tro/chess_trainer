@@ -20,7 +20,10 @@ from . import db, explain as explain_mod, grading, themes
 from . import engine
 from .engine import with_wp
 
-REVIEW_DEPTH = 16          # the floor; simple positions go far deeper, see BUDGET
+REVIEW_DEPTH = 20          # the floor everywhere: the same depth that grades
+                           # your drills, so a verdict never depends on which
+                           # path reached the position. Simple positions still
+                           # go deeper within BUDGET.
 BUDGET = 0.6               # seconds of extra search allowed per position
 MATE_HORIZON = 11          # a mate this long or shorter counts as one you had
 
