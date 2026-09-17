@@ -236,9 +236,10 @@ function pollJob(job) {
 }
 
 async function renderDrill(d) {
+  const mine = ++renderSeq;
   el.treeBox.hidden = false;
   if (!d) {
-    board.disableMoveInput();
+    moveInput(null);
     await setBoard(FEN.start, false);
     document.body.dataset.turn = "white";
     el.status.textContent = "";
@@ -273,8 +274,9 @@ async function renderDrill(d) {
     ? (at === 0 ? d.base_fen : hist[at - 1].fen)
     : (showingBest ? d.fen : (d.done && a ? a.fen_after : d.fen));
 
-  board.disableMoveInput();
+  moveInput(null);
   await orient(d.my_colour === "black" ? COLOR.black : COLOR.white);
+  if (mine !== renderSeq) return;      // a newer render has taken over
   if (stepping) {
     // Walking the round's own moves: no animation, just the position asked
     // for. The replays below would drag the board back to the latest one.
@@ -295,6 +297,7 @@ async function renderDrill(d) {
     await setBoard(target, shownFen !== null && shownFen !== target);
   }
   shownKey = key;
+  if (mine !== renderSeq) return;
 
   board.removeArrows();
   if (stepping) {
@@ -319,7 +322,7 @@ async function renderDrill(d) {
 
   document.body.dataset.turn = d.my_colour;
   if (d.can_answer && !stepping) {
-    board.enableMoveInput(inputHandler, d.my_colour === "black" ? COLOR.black : COLOR.white);
+    moveInput(d.my_colour === "black" ? COLOR.black : COLOR.white);
   }
 
   const reply = d.opp_reply && !d.done ? d.opp_reply.san : null;
@@ -358,10 +361,31 @@ async function orient(colour) {
   await board.setOrientation(colour);
 }
 
-async function setBoard(fen, animated) {
-  if (fen === shownFen && animated) return;
-  shownFen = fen;
-  await board.setPosition(fen, !!animated);
+// Board updates run one after another. Two overlapping setPosition calls --
+// an animation still in flight when the next one starts -- can land pieces
+// from the older position on top of the newer one.
+let boardQueue = Promise.resolve();
+// Which render is the current one. A render that has been overtaken stops
+// rather than finishing on top of the newer one.
+let renderSeq = 0;
+// Move input is enabled once, for one colour: enabling it twice makes the
+// board library complain, and disabling what is not on loses a click.
+let inputColour = null;
+
+function moveInput(colour) {
+  if (inputColour === colour) return;
+  if (inputColour !== null) board.disableMoveInput();
+  inputColour = colour;
+  if (colour !== null) board.enableMoveInput(inputHandler, colour);
+}
+
+function setBoard(fen, animated) {
+  boardQueue = boardQueue.then(async () => {
+    if (fen === shownFen && animated) return;
+    shownFen = fen;
+    await board.setPosition(fen, !!animated);
+  }).catch(() => {});
+  return boardQueue;
 }
 
 function pause(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -744,7 +768,7 @@ function submit(from, to, promotion) {
   submitting = true;
   // Let the library finish its own pointer sequence before standing it down,
   // or it complains about the square that is no longer under the cursor.
-  setTimeout(() => board.disableMoveInput(), 0);
+  setTimeout(() => moveInput(null), 0);
   shownFen = null;                 // the piece has already moved on screen
   call("/api/answer", { from, to, promotion })
     .finally(() => { submitting = false; });
@@ -754,13 +778,17 @@ function submit(from, to, promotion) {
 // --- walking a principal variation -----------------------------------------
 
 async function walkPv(kind, index) {
+  const live = state && state.drill;
+  if (live && cursorAt(live) < (live.history || []).length) {
+    stepCursor = { key: revealKey(live), at: null };
+  }
   const a = state.drill && state.drill.answer;
   if (!a) return;
   const pv = kind === "best" ? a.explanation.best_pv : a.explanation.my_pv;
   const step = pv && pv[index];
   if (!step) return;
   pvCursor = { kind, index, step };
-  board.disableMoveInput();
+  moveInput(null);
   await setBoard(step.fen_after, true);
   markers([[step.uci.slice(0, 2), MARKER_MOVE], [step.uci.slice(2, 4), MARKER_MOVE]], true);
   board.removeArrows();
@@ -779,7 +807,7 @@ async function leavePv() {
 // --- game walk -------------------------------------------------------------
 
 async function renderGame(g) {
-  board.disableMoveInput();
+  moveInput(null);
   board.removeArrows();
   await orient(g.colour === "black" ? COLOR.black : COLOR.white);
   await setBoard(g.fen, true);
@@ -1182,7 +1210,7 @@ async function drawEditor() {
     `<div class="row"><button class="primary" data-act="ed-go">Drill this position</button></div>` +
     `<div class="row small"><button data-act="ed-cancel">` +
     `← Leave set-up</button></div>`;
-  board.disableMoveInput();
+  moveInput(null);
   board.removeMarkers();
   board.removeArrows();
   el.status.textContent = "Setting up a position";
@@ -1306,7 +1334,12 @@ function squareFromEvent(event) {
 
 function clickToMove(square, justPickedUp) {
   const d = state && state.drill;
-  if (!d || !d.can_answer || submitting) return;
+  if (!d) return;
+  // Standing in a past position: a click here would pick a piece up off a
+  // board that is not the live one and play it there. Come back to the
+  // present instead, which is what the click is really asking for.
+  if (cursorAt(d) < (d.history || []).length) return stepTo(d, (d.history || []).length);
+  if (!d.can_answer || submitting) return;
   const legal = d.legal || {};
   // Clicking the piece you already had up puts it down again.
   if (selected === square && !justPickedUp) return select(null);
@@ -1316,7 +1349,7 @@ function clickToMove(square, justPickedUp) {
       const from = selected;
       // The library is mid-click on the same move; stand it down completely so
       // the two paths cannot both try to play it.
-      board.disableMoveInput();
+      moveInput(null);
       select(null);
       if (!move.promotion) board.movePiece(from, square, true);
       return void play(from, square, move.promotion);
@@ -1807,7 +1840,9 @@ function esc(text) {
 }
 
 // Handy from the browser console when something looks wrong.
-window.__trainer = { board, editor, get state() { return state; }, get selected() { return selected; } };
+window.__trainer = { board, editor, get state() { return state; },
+                     get selected() { return selected; },
+                     get shownFen() { return shownFen; } };
 
 // A drill is already running when the page loads.
 call("/api/state");
