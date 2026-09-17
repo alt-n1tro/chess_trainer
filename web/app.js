@@ -23,6 +23,7 @@ const el = {
   modeBtn: $("btn-mode"), modeList: $("mode-list"),
   chainBtn: $("btn-chain"), chainList: $("chain-list"),
   cards: $("cards"), library: $("library"), warmBtn: $("btn-warming"),
+  version: $("version"),
 };
 
 const MODE_LABEL = { openings: "Openings", middlegame: "Middlegame", endgame: "Endgame" };
@@ -126,6 +127,7 @@ async function apply(data) {
     `<span>${MODE_LABEL[m.mode]}</span>` +
     `<span class="n">${m.count} position${m.count === 1 ? "" : "s"}</span></li>`
   ).join("");
+  if (data.version) el.version.textContent = `v${data.version}`;
   renderWarming(data.warming !== false);
   renderCards(data);
   // A state arriving while you are setting up (a finished analysis, say) must

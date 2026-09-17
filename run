@@ -42,7 +42,7 @@ cmd="${1:-}"
 
 case "$cmd" in
     ""|-h|--help|help) usage ;;
-    web|import|review|warm|verify|whoami|doctor)
+    web|import|review|warm|verify|whoami|doctor|version)
         ensure_venv
         exec "$PY" -m server.cli "$cmd" "$@"
         ;;

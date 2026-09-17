@@ -42,6 +42,7 @@ ever installed with sudo; if a step would need root, the app stops and says so.
 | `./run verify [--positions N]` | Check the app's moves against a second, deeper Stockfish process with no cache: the opponent's options, the reply it calls best, a graded reply, a chain step, and a reviewed move of yours. Prints every disagreement and how big it is. About a minute per position. |
 | `./run whoami [name]` | Show or set which chess.com name is you. `import --player` sets it the first time. |
 | `./run doctor` | Check the engine binary, database, venv and port. |
+| `./run version` | Print the build version (also shown in the top bar). |
 | `./run test` | Run the test suite. |
 
 `./run help` prints the same from the program itself, and every command
@@ -350,3 +351,10 @@ question the line was about.
   `web/vendor/NOTICE.md`.
 
 Everything lives in `data/trainer.db`.
+
+## Version
+
+The build number lives at the top of `CHANGELOG.md` and nowhere else;
+`server/version.py` reads it, the top bar shows it, and `./run version`
+prints it. Major means a habit of yours is now wrong, minor means there is
+something new to use, patch means a fix.

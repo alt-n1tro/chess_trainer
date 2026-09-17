@@ -1088,5 +1088,39 @@ class WithEngine(unittest.TestCase):
         self.assertEqual(deeper.to_json()["base_fen"], answer["fen_after"])
 
 
+class TheVersionCounter(unittest.TestCase):
+    """The number is read from the changelog, so the two cannot drift."""
+
+    def test_version_is_the_top_changelog_entry(self):
+        from server import version
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "CHANGELOG.md")
+        with open(path, encoding="utf-8") as fh:
+            headings = [ln for ln in fh if ln.startswith("## ")]
+        self.assertTrue(headings, "the changelog has no releases")
+        self.assertTrue(headings[0].startswith("## " + version.VERSION),
+                        "version.VERSION is not the first changelog entry")
+
+    def test_version_reads_as_three_numbers(self):
+        from server import version
+        self.assertEqual(len(version.parts()), 3)
+        self.assertGreaterEqual(version.parts(), (1, 0, 0))
+
+    def test_every_release_heading_is_semantic_and_descending(self):
+        from server import version
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "CHANGELOG.md")
+        with open(path, encoding="utf-8") as fh:
+            found = re.findall(r"^## (\S+)", fh.read(), re.M)
+        seen = []
+        for name in found:
+            self.assertRegex(name, r"^\d+\.\d+\.\d+$")
+            seen.append(tuple(int(n) for n in name.split(".")))
+        self.assertEqual(seen, sorted(seen, reverse=True),
+                         "releases are not newest first")
+        self.assertEqual(len(set(seen)), len(seen), "a version is repeated")
+        _ = version.VERSION
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

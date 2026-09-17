@@ -17,6 +17,7 @@ import chess
 import chess.pgn
 
 from . import corpus, db, drills, engine, explain, jobs, review, stats
+from .version import VERSION
 from .drills import Drill
 
 WEB_DIR = os.path.join(db.ROOT, "web")
@@ -309,7 +310,7 @@ class Trainer:
     def state(self) -> dict:
         # "kind" marks a full state payload. Several endpoints also return a
         # "mode" field, and the client must not mistake those for one.
-        out = {"kind": "state", "mode": self.mode, "modes": self.mode_summary(),
+        out = {"kind": "state", "version": VERSION, "mode": self.mode, "modes": self.mode_summary(),
                "chain": self.chain, "max_chain": drills.MAX_CHAIN,
                "stack_depth": len(self.stack), "game": self.game_state(),
                # job first: a finished one sets the lock that focus reports.

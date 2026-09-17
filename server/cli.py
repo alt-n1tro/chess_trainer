@@ -11,6 +11,7 @@ import chess
 import chess.pgn
 
 from . import app, corpus, db, engine, review, verify
+from .version import VERSION
 
 
 class Progress:
@@ -327,8 +328,14 @@ def cmd_verify(args) -> int:
     return 0 if result["ok"] else 1
 
 
+def cmd_version(args) -> int:
+    print(VERSION)
+    return 0
+
+
 def cmd_doctor(args) -> int:
     ok = True
+    print(f"chess-trainer {VERSION}")
     print(f"python      {sys.version.split()[0]}  ({sys.executable})")
     try:
         import chess as c
@@ -451,6 +458,9 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("doctor", help="check the engine, database, venv and port")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("version", help="print the build version")
+    p.set_defaults(func=cmd_version)
 
     args = parser.parse_args(argv)
     return args.func(args)

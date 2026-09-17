@@ -94,6 +94,10 @@ input:focus { outline: none; border-color: var(--accent); }
   background: var(--raise);
 }
 .brand { font-weight: 700; letter-spacing: .2px; }
+.version {
+  color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums;
+  letter-spacing: .3px;
+}
 /* The idle switch sits on the left, by the title; everything else is pushed
    to the right by its auto margin. */
 #btn-warming { margin-right: auto; font-variant-numeric: tabular-nums; }
