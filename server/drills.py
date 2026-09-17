@@ -750,10 +750,10 @@ class Drill:
         best_eval, after = self._eval_after(board, move)
         self._record(rs, None, "shown", None, rs["step"])
         rs["steps"].append("shown")
-        rs["history"].append({"san": best_san, "uci": move.uci(),
-                              "fen": after.fen(), "by": "you"})
         self.results[self.index] = _worst(rs["steps"])
         best_san = board.san(move)
+        rs["history"].append({"san": best_san, "uci": move.uci(),
+                              "fen": after.fen(), "by": "you"})
         kept = self._stored_reasons(rs, best["move"])
         shown_exp = explain_mod.explain(
             rs["fen"], None, best["move"],

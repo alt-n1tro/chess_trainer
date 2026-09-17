@@ -1011,6 +1011,19 @@ class WithEngine(unittest.TestCase):
         self.assertEqual(len(final["steps"]), 3)
         self.assertEqual(len(set(seen)), 3, seen)
 
+    def test_being_shown_the_move_records_it_in_the_round(self):
+        """Every path that plays a move has to add it to the round's history,
+        and the one that did not was only caught by driving the browser."""
+        drill = drills.Drill(db.connect(), self.pool, chess.Board().fen(),
+                             "openings")
+        before = len(drill.round_state["history"])
+        drill.show()
+        history = drill.round_state["history"]
+        self.assertEqual(len(history), before + 1)
+        self.assertEqual(history[-1]["by"], "you")
+        self.assertTrue(history[-1]["san"])
+        chess.Board(history[-1]["fen"])          # a real position
+
     def test_a_chain_is_recorded_move_by_move(self):
         drill = drills.Drill(db.connect(), self.pool, chess.Board().fen(),
                              "openings", chain=2)
