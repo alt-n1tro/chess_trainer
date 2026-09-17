@@ -1048,6 +1048,47 @@ class WithEngine(unittest.TestCase):
         self.assertEqual(again["opp_san"], asked["opp_san"])
         self.assertEqual(again["steps"], [])
 
+    def test_replay_move_puts_back_only_the_move_you_just_played(self):
+        """Replaying a move must not throw away the chain you have already
+        found: step two asked again is step two, not step one."""
+        drill = drills.Drill(db.connect(), self.pool, chess.Board().fen(),
+                             "openings", chain=3)
+        drill.answer(drill.my_lines()[0]["move"])
+        asked = drill.to_json()                   # the second question
+        self.assertEqual(asked["step"], 2)
+        history = list(drill.round_state["history"])
+        drill.answer(drill.my_lines()[0]["move"])
+        self.assertEqual(drill.round_state["step"], 3)
+
+        drill.replay_move()
+        again = drill.to_json()
+        self.assertEqual(again["step"], 2)
+        self.assertEqual(again["fen"], asked["fen"])
+        self.assertEqual(again["opp_reply"], asked["opp_reply"])
+        self.assertEqual([h["uci"] for h in again["history"]],
+                         [h["uci"] for h in history])
+        self.assertIsNone(again["answer"])
+        self.assertTrue(again["can_answer"])
+        self.assertEqual(len(again["steps"]), 1,
+                         "the move you did find stays found")
+        # and the question can be answered again
+        self.assertEqual(drill.answer(drill.my_lines()[0]["move"])["step"], 2)
+
+    def test_replay_move_on_the_first_move_asks_it_again(self):
+        drill = drills.Drill(db.connect(), self.pool, chess.Board().fen(),
+                             "openings")
+        asked = drill.to_json()
+        drill.answer(drill.my_lines()[1]["move"])
+        self.assertIsNotNone(drill.to_json()["answer"])
+        drill.replay_move()
+        again = drill.to_json()
+        self.assertEqual(again["fen"], asked["fen"])
+        self.assertEqual(again["opp_san"], asked["opp_san"])
+        self.assertIsNone(again["answer"])
+        self.assertTrue(again["can_answer"])
+        self.assertEqual(again["steps"], [])
+        self.assertEqual(len(again["history"]), len(asked["history"]))
+
     def test_drill_from_here_can_start_from_a_line_you_walked(self):
         """Walking into the engine's line and drilling from there must keep
         the position you are looking at, not snap back to the one you

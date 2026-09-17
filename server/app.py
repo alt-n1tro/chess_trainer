@@ -789,6 +789,12 @@ class Handler(BaseHTTPRequestHandler):
             t.drill.replay()
             return self.json(t.state())
 
+        if path == "/api/replay_move":
+            if t.drill is None:
+                raise ValueError("no drill in progress")
+            t.drill.replay_move()
+            return self.json(t.state())
+
         if path == "/api/restart":
             if t.drill is None:
                 raise ValueError("no drill in progress")

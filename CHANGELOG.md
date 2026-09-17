@@ -12,6 +12,14 @@ Semantic versioning. The number lives here, at the top of this file, and
 
 Every change lands with an entry here and the version bumped to match.
 
+## 1.0.1 — 2026-09-17
+
+### Fixed
+- "Replay move" put the whole round back, which in a chain threw away the
+  moves you had already found and re-asked the first one. It now puts back
+  exactly the question you just answered, keeping the rest of the chain
+  played and scored. "Replay drill" is still the whole drill.
+
 ## 1.0.0 — 2026-09-17
 
 First numbered build. Everything below was already here; the version counter

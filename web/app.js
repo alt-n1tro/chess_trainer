@@ -1434,7 +1434,7 @@ document.addEventListener("click", async (event) => {
         ? { fen: step.fen_after, prev_fen: step.fen_before, last_move: step.uci }
         : {});
     }
-    case "reset": shownKey = null; return void call("/api/reset", {});
+    case "reset": shownKey = null; return void call("/api/replay_move", {});
     case "back": shownKey = null; return void call("/api/back", {});
     case "save": {
       const name = window.prompt("Name this position",

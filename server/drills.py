@@ -437,12 +437,53 @@ class Drill:
                          "fen": board.fen(), "by": "them"}],
             "opp_explanation": None,
         }
+        self._mark_step(self.round_state)
         self._warm()
 
     def select_candidate(self, which: int) -> None:
         """Keys 1-5 pick the nth opponent option as displayed."""
         if 0 <= which < len(self.candidates) and which in self.order:
             self.start_round(self.order.index(which))
+
+    def _mark_step(self, rs) -> None:
+        """Remember the question as it is being asked, so that one move of a
+        chain can be taken back without taking the whole round back."""
+        rs.setdefault("marks", []).append({
+            "fen": rs["fen"], "phase": rs["phase"], "hash": rs["hash"],
+            "node_id": rs["node_id"], "step": rs["step"],
+            "history": len(rs["history"]),
+            "opp_reply": rs.get("opp_reply"),
+        })
+
+    def replay_move(self) -> None:
+        """Ask the move you just played again, and nothing else.
+
+        The moves before it in a chain stay played and stay scored; only the
+        last question is put back, with your answer to it cleared. On the
+        first move of a round this is the same as replaying the round, which
+        is what it falls back to when there is no step to take back.
+        """
+        rs = self.round_state
+        if rs is None:
+            return self.restart()
+        marks = rs.get("marks") or []
+        if not marks:
+            return self.start_round(self.index)
+        # One mark per question asked. The one to put back is the question
+        # your last answer answered -- not the one it led to.
+        at = max(0, min(len(rs["steps"]) - 1, len(marks) - 1))
+        del marks[at + 1:]
+        mark = marks[at]
+        rs["fen"], rs["phase"] = mark["fen"], mark["phase"]
+        rs["hash"], rs["node_id"] = mark["hash"], mark["node_id"]
+        rs["step"] = mark["step"]
+        rs["opp_reply"] = mark["opp_reply"]
+        del rs["history"][mark["history"]:]
+        rs["steps"] = rs["steps"][:mark["step"] - 1]
+        rs["answer"] = None
+        rs["opp_explanation"] = None
+        rs["done"] = False
+        self.results[self.index] = _worst(rs["steps"])
 
     def replay(self) -> None:
         """Put the question back exactly as it was asked: the same position,
@@ -733,6 +774,7 @@ class Drill:
         rs["node_id"] = tree_touch(self.conn, self.root_hash, my_node,
                                    reply_uci, board, self.depth_level, phase)
         rs["step"] += 1
+        self._mark_step(rs)
         self._warm_chain(board)
 
     def show(self) -> dict:
