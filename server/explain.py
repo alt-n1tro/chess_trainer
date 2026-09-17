@@ -34,6 +34,7 @@ NAMES = {
 }
 
 
+SAME_VALUE = 1.0          # closer than this and the two moves are the same
 JUDGE_DEPTH = 20          # what a claim is checked at: the same depth as
                           # everything else, so the search that confirms a
                           # claim is the search that graded the move
@@ -1075,13 +1076,19 @@ def _claim_positional(root, move, san, after, me, where, name):
             f" with them to move, so they have to give way and let your king"
             f" in. In a pawn ending that is usually the whole game.",
             after, square=where)
-    if root.is_castling(move) and _king_exposed(root, me):
+    if root.is_castling(move):
+        shield = _shield(after, me)
+        rook_file = "f" if chess.square_file(move.to_square) > 4 else "d"
+        exposed = (" It was sitting on an open file, which is where their"
+                   " rook wants to be." if _king_exposed(root, me) else "")
         return _claim(
             "castle",
-            f"{san} gets the king off an open file — the file their rook wants"
-            f" — and puts a rook where the middle of the board is about to"
-            f" open.",
-            after, square=where)
+            f"{san} takes the king out of the middle and puts it behind"
+            f" {_spell(shield)} pawn{'' if shield == 1 else 's'}, with the"
+            f" rook coming to the {rook_file}-file.{exposed} There is no"
+            f" tactic here: this is the move that makes everything after it"
+            f" safe to play.",
+            after, square=where, shield=shield)
     return None
 
 
@@ -1522,9 +1529,18 @@ def why_best(root: chess.Board, move: chess.Move, sans: list[str],
         if plan:
             items.append(plan)
     if not items:
-        items.append(_claim("why", f"{san} keeps everything defended and"
-                            f" improves the worst-placed piece. There is no"
-                            f" tactic in the position to find.", root))
+        # Nothing structural, nothing forced. Say what the move touches and
+        # be honest that the value is small, rather than inventing a reason.
+        piece_now = after.piece_at(move.to_square)
+        what = NAMES[piece_now.piece_type] if piece_now else "piece"
+        reach = len(after.attacks(move.to_square))
+        items.append(_claim(
+            "why",
+            f"{san} is a quiet move. The {what} covers {_spell(reach)} square"
+            f"{'' if reach == 1 else 's'} from {where}, nothing is hanging on"
+            f" either side, and the engine simply likes this arrangement"
+            f" best. Positions like this are decided later, not here.",
+            after, square=where, reach=reach))
     if alts:
         alt = _runner_up(root, alts, me)
         if alt:
@@ -1895,6 +1911,48 @@ def _cost_threat(root, my_move, my_san, after_mine, me, theirs):
         root, my_move=my_san, their_move=theirs["san"], gain=theirs["gain"])
 
 
+BANDS = ((88, "winning"), (68, "clearly better"), (56, "a little better"),
+         (44, "level"), (32, "a little worse"), (12, "clearly worse"),
+         (0, "lost"))
+
+
+def _band(wp: float) -> str:
+    for edge, name in BANDS:
+        if wp >= edge:
+            return name
+    return "lost"
+
+
+def _standing(root, my_san, wp_mine, wp_best):
+    """Where the game stood, and where it stands now. This is the sentence
+    that answers "was it a draw before I did that?" and it is the first thing
+    worth knowing about a move."""
+    if wp_mine is None or wp_best is None:
+        return None
+    was, now = _band(wp_best), _band(wp_mine)
+    if was == now:
+        return None
+    if wp_mine < wp_best:
+        return _claim(
+            "standing",
+            f"The position was {was} before {my_san}. After it, you are"
+            f" {now}.",
+            root, was=was, now=now, wp_before=round(wp_best, 1),
+            wp_after=round(wp_mine, 1))
+    return None
+
+
+def _cost_same(root, my_san, best_san, wp_mine, wp_best):
+    """Your move is as good as the engine's. Say it in one line and get out
+    of the way: the explanation that matters is why the move works, and that
+    is about your move, not about theirs."""
+    return _claim(
+        "same",
+        f"{my_san} is as good as {best_san}: the engine rates them the same"
+        f" here, so there was nothing to find. Here is what your move does.",
+        root, my_move=my_san, best=best_san)
+
+
 def _cost_allows(root, my_san, best_san, after_mine, after_best, me):
     """Nothing hung, but your move handed them something the engine's move
     did not. This is the most useful thing to say about a quiet mistake: not
@@ -2016,6 +2074,8 @@ def _cost_quiet(root, my_san, best_san, steps, wp_mine, wp_best):
     gap = wp_best - wp_mine
     reply = steps[1][1] if len(steps) > 1 else None
     if gap >= 8:
+        # A big drop with nothing hanging is a positional mistake, and the
+        # honest thing is to say where it shows rather than to invent a cause.
         after = (f" They answer {reply}, and the line below is where the"
                  f" difference shows." if reply else
                  " The line below is where the difference shows.")
@@ -2030,9 +2090,9 @@ def _cost_quiet(root, my_san, best_san, steps, wp_mine, wp_best):
     return _claim(
         "quiet",
         f"Nothing falls apart after {my_san}: no piece drops and no attack"
-        f" lands. It is a question of degree. The engine's move keeps"
-        f" {wp_best:.0f}% where yours keeps {wp_mine:.0f}%, and over a game"
-        f" that difference is the whole of it.",
+        f" lands. The engine puts your chances at {wp_mine:.0f} in 100 here,"
+        f" against {wp_best:.0f} after {best_san} — close enough that the"
+        f" difference is a matter of taste rather than a mistake.",
         root, my_move=my_san, wp_mine=round(wp_mine, 1),
         wp_best=round(wp_best, 1))
 
@@ -2048,6 +2108,9 @@ def cost_claims(root: chess.Board, my_move: chess.Move, my_san: str,
     mine_end = steps[-1][3] if steps else root
     best_end = best_boards[-1] if best_boards else root
     out = []
+    standing = _standing(root, my_san, wp_mine, wp_best)
+    if standing:
+        out.append(standing)
 
     mate = _cost_mate(root, my_san, steps, me)
     if mate:
@@ -2059,7 +2122,7 @@ def cost_claims(root: chess.Board, my_move: chess.Move, my_san: str,
         slower = _cost_mate_speed(root, my_san, best_san, mate_mine, mate_best)
         if slower:
             out.append(slower)
-    if not out:
+    if len(out) < 2:
         material = _cost_material(root, my_move, my_san, steps, me, judge)
         if material:
             out.append(material)
@@ -2086,11 +2149,137 @@ def cost_claims(root: chess.Board, my_move: chess.Move, my_san: str,
             if item:
                 out.append(item)
                 break
-    if not out:
+    if len(out) < 2:
         quiet = _cost_quiet(root, my_san, best_san, steps, wp_mine, wp_best)
         if quiet:
             out.append(quiet)
     return out
+
+
+def opponent_claims(root: chess.Board, their_move: chess.Move, options: list,
+                    rank: int | None, judge=None) -> list[dict]:
+    """Why their move was good or bad, written from your side of the board.
+
+    The claims above are all phrased for the player who moved: "you win a
+    piece", "they cannot answer both". Reusing them for the opponent's move
+    would put every pronoun the wrong way round, so their move gets its own
+    small set of sentences, and every one of them is about what it means for
+    you.
+    """
+    them = root.turn
+    me = not them
+    san = root.san(their_move)
+    after = root.copy(stack=False)
+    after.push(their_move)
+    out = []
+
+    # What could you already have taken before they moved? Without this the
+    # sentence below claims their move handed you something when all it did
+    # was fail to stop what was there already.
+    was = _shot_before(root, me)
+
+    # 1. Did it hand you something, or leave something standing?
+    gift = best_shot(after, me)
+    if gift and gift["mate"]:
+        out.append(_claim(
+            "gift",
+            f"{san} loses on the spot: {gift['san']} is mate.",
+            after, their_move=san, your_move=gift["san"], mate=True))
+    elif gift:
+        made_it = was is None or gift["gain"] > was["gain"]
+        if made_it:
+            out.append(_claim(
+                "gift",
+                f"{san} hands you something that was not there before:"
+                f" {gift['san']} wins {_worth(gift['gain'])}, and counting the"
+                f" exchange through to the end says it holds.",
+                after, their_move=san, your_move=gift["san"],
+                gain=gift["gain"]))
+        else:
+            out.append(_claim(
+                "gift",
+                f"{gift['san']} was there before {san} and it is still there:"
+                f" it wins {_worth(gift['gain'])}. Their move did nothing"
+                f" about it.",
+                after, their_move=san, your_move=gift["san"],
+                gain=gift["gain"]))
+
+    # 2. What are they threatening now, and did this move create it?
+    threat = best_shot(after, them)
+    if threat and len(out) < 2:
+        what = ("mate" if threat["mate"]
+                else f"winning {_worth(threat['gain'])}")
+        try:
+            new_threat = chess.Move.from_uci(
+                _uci_of(root, threat["san"])) not in root.legal_moves
+        except Exception:
+            new_threat = False
+        lead = (f"{san} sets up {threat['san']}" if new_threat
+                else f"They are threatening {threat['san']}")
+        out.append(_claim(
+            "threat",
+            f"{lead}, {what}. Whatever you play has to deal with it.",
+            after, their_move=san, threatens=threat["san"]))
+
+    # 3. Where it stands among the moves they had.
+    if options and rank and len(out) < 3:
+        best = options[0]
+        if rank == 1:
+            out.append(_claim(
+                "their_best",
+                f"{san} was the best they had, so there is no present here:"
+                f" you have to find the best answer to a good move.",
+                root, their_move=san, rank=rank))
+        else:
+            gap = (best.get("wp") or 50.0) - (
+                next((o.get("wp") for o in options
+                      if o["uci"] == their_move.uci()), 50.0) or 50.0)
+            try:
+                best_san = root.san(chess.Move.from_uci(best["uci"]))
+            except (ValueError, AssertionError):
+                best_san = best["uci"]
+            if gap >= 2:
+                out.append(_claim(
+                    "their_best",
+                    f"{best_san} was better for them, by {gap:.0f} points of"
+                    f" win probability. {san} comes {_ordinal(rank)} of the"
+                    f" {_spell(len(options))} moves the engine looked at.",
+                    root, their_move=san, their_best=best_san, rank=rank))
+    return out
+
+
+def _shot_before(root: chess.Board, me: bool):
+    """What you could have won if it were your move in the position before
+    theirs. Anything that survives their move was not their gift."""
+    probe = root.copy(stack=False)
+    if probe.turn != me:
+        if probe.is_check():
+            return None
+        probe.push(chess.Move.null())
+    return best_shot(probe, me)
+
+
+def _uci_of(board: chess.Board, san: str) -> str:
+    """The move behind an algebraic string, in the position it was read in.
+    Their threat is a move they would make next, so it is read after a pass."""
+    probe = board.copy(stack=False)
+    for attempt in (probe, None):
+        if attempt is None:
+            if probe.is_check():
+                raise ValueError(san)
+            probe = board.copy(stack=False)
+            probe.push(chess.Move.null())
+        try:
+            return probe.parse_san(san).uci()
+        except ValueError:
+            continue
+    raise ValueError(san)
+
+
+def _ordinal(n: int) -> str:
+    words = {1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth",
+             6: "sixth", 7: "seventh", 8: "eighth"}
+    return words.get(n, f"{n}th")
 
 
 def explain(fen: str, my_move: str, best_move: str, pvs: dict,
@@ -2147,9 +2336,25 @@ def explain(fen: str, my_move: str, best_move: str, pvs: dict,
         out.text = " ".join(r["text"] for r in reasons[:2])
         return out
 
+    wp_mine, wp_best = pvs.get("wp_mine"), pvs.get("wp_best")
+    same = (wp_mine is not None and wp_best is not None
+            and wp_best - wp_mine < SAME_VALUE)
+    if same:
+        # Your move is worth the same as the engine's, so the question is not
+        # "what did you miss" -- there was nothing to miss. It is "why does
+        # this move work", and that is a question about the move you played.
+        out.cost = [_cost_same(root, mine_sans[0], best_sans[0], wp_mine, wp_best)]
+        mine_reasons = why_best(root, chess.Move.from_uci(mine_line[0]),
+                                mine_sans, mine_boards, me, line=mine_line,
+                                alts=pvs.get("alts"), judge=judge)
+        out.why = [dict(r) for r in mine_reasons]
+        out.items = out.cost + out.why
+        out.text = " ".join(c["text"] for c in out.items[:2])
+        return out
+
     cost = cost_claims(root, chess.Move.from_uci(mine_line[0]), mine_sans[0],
                        best_sans[0], mine_line, best_boards, me, judge=judge,
-                       wp_mine=pvs.get("wp_mine"), wp_best=pvs.get("wp_best"),
+                       wp_mine=wp_mine, wp_best=wp_best,
                        mate_mine=pvs.get("mate_mine"),
                        mate_best=pvs.get("mate_best"))[:MAX_ITEMS]
 

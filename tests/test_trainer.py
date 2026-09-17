@@ -711,7 +711,8 @@ class WhatYourMoveCost(unittest.TestCase):
         self.assertNotIn("Nothing falls apart", claim["text"])
         self.assertIn("29 points", claim["text"])
         small = explain._cost_quiet(chess.Board(), "a3", "e4", [], 51.0, 54.0)
-        self.assertIn("question of degree", small["text"])
+        self.assertIn("matter of taste", small["text"])
+        self.assertIn("51 in 100", small["text"])
 
     def test_shelter_is_not_discussed_in_a_pawnless_ending(self):
         bare = chess.Board("4k3/8/8/8/3Q4/8/8/4K3 b - - 0 1")

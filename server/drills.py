@@ -363,6 +363,7 @@ class Drill:
             out.append({"uci": line["move"], "san": san, "cp": line["cp"],
                         "wp": line["wp"], "mate": line["mate"],
                         "pv": line["pv"]})
+        self.options = out          # every option they had, ranked
         kept = plausible_moves(out)
         kept = with_played(kept, out, self.played_move, self.board)
         if first_move and not any(c["uci"] == first_move for c in kept):
@@ -430,6 +431,11 @@ class Drill:
             "steps": [],            # a verdict per move you have played here
             "done": False,
             "opp_reply": None,      # what they played to reach this step
+            # Every move played in this round, in order, so the panel can
+            # walk back and forth through it.
+            "history": [{"san": cand["san"], "uci": cand["uci"],
+                         "fen": board.fen(), "by": "them"}],
+            "opp_explanation": None,
         }
         self._warm()
 
@@ -561,6 +567,31 @@ class Drill:
                                   self.pool.version,
                                   min_depth=explain_mod.JUDGE_DEPTH)
 
+    def _explain_their_move(self, rs) -> dict | None:
+        """Why their move was good or bad, judged among the moves they had.
+
+        Computed once you have answered, never before: a bad move of theirs
+        tells you there is something to take, and that is the question.
+        """
+        cand = rs["candidate"]
+        options = getattr(self, "options", None)
+        if not options:
+            return None
+        best = options[0]
+        theirs = next((o for o in options if o["uci"] == cand["uci"]), None)
+        if theirs is None:
+            return None
+        rank = next((i + 1 for i, o in enumerate(options)
+                     if o["uci"] == cand["uci"]), None)
+        verdict = grading.grade(best, theirs, rank)
+        claims = explain_mod.opponent_claims(
+            self.board, chess.Move.from_uci(cand["uci"]), options, rank,
+            judge=self._judge())
+        return {"san": cand["san"], "verdict": verdict["verdict"],
+                "label": verdict["label"], "tone": verdict["tone"],
+                "delta_wp": verdict["delta_wp"], "rank": rank,
+                "options": len(options), "claims": claims}
+
     def _keep_reasons(self, rs, best_uci: str, exp) -> None:
         """Keep what was just worked out. The searches behind it are cached
         already; this saves rebuilding the sentences, and means a position
@@ -646,7 +677,10 @@ class Drill:
         self._record(rs, move.uci(), result["verdict"], result["delta_wp"],
                      rs["step"])
         rs["steps"].append(result["tone"])
+        rs["history"].append({"san": san, "uci": move.uci(),
+                              "fen": after.fen(), "by": "you"})
         self.results[self.index] = _worst(rs["steps"])
+        rs["opp_explanation"] = self._explain_their_move(rs)
         rs["answer"] = {
             "my_move": move.uci(), "my_san": san,
             "best_move": best_move.uci(), "best_san": best_san,
@@ -691,6 +725,8 @@ class Drill:
             return
         phase = db.classify_phase(board)
         rs["opp_reply"] = {"uci": reply_uci, "san": san, "fen": board.fen()}
+        rs["history"].append({"san": san, "uci": reply_uci,
+                              "fen": board.fen(), "by": "them"})
         rs["fen"] = board.fen()
         rs["phase"] = phase
         rs["hash"] = db.pos_hash(board, phase)
@@ -714,6 +750,8 @@ class Drill:
         best_eval, after = self._eval_after(board, move)
         self._record(rs, None, "shown", None, rs["step"])
         rs["steps"].append("shown")
+        rs["history"].append({"san": best_san, "uci": move.uci(),
+                              "fen": after.fen(), "by": "you"})
         self.results[self.index] = _worst(rs["steps"])
         best_san = board.san(move)
         kept = self._stored_reasons(rs, best["move"])
@@ -728,6 +766,7 @@ class Drill:
         my_node = tree_touch(self.conn, self.root_hash, rs["node_id"],
                              move.uci(), after, self.depth_level,
                              db.classify_phase(after))
+        rs["opp_explanation"] = self._explain_their_move(rs)
         rs["answer"] = {
             "my_move": None, "my_san": None,
             "best_move": best["move"], "best_san": best_san,
@@ -803,6 +842,11 @@ class Drill:
                 "steps": list(rs["steps"]),
                 "opp_reply": rs["opp_reply"],
                 "done": rs["done"],
+                "history": list(rs["history"]),
+                # Their move explained, once you have answered: before that it
+                # would tell you what to look for.
+                "opp_explanation": (rs["opp_explanation"]
+                                    if rs["answer"] else None),
             })
         else:
             state.update({"fen": self.fen, "legal": {}, "answer": None,

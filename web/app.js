@@ -30,6 +30,15 @@ const MODE_NOUN = { openings: "opening", middlegame: "middlegame", endgame: "end
 const MARKER_MOVE = { class: "marker-square-move", slice: "markerSquare" };
 const MARKER_BEST = { class: "marker-square-best", slice: "markerSquare" };
 const MARKER_PLAYED = { class: "marker-square-played", slice: "markerSquare" };
+// The verdict's own colours, so the square you landed on says how good it was.
+const MARKER_TONE = {
+  best: { class: "marker-square-best", slice: "markerSquare" },
+  good: { class: "marker-square-good", slice: "markerSquare" },
+  inaccuracy: { class: "marker-square-inaccuracy", slice: "markerSquare" },
+  mistake: { class: "marker-square-mistake", slice: "markerSquare" },
+  blunder: { class: "marker-square-blunder", slice: "markerSquare" },
+  shown: { class: "marker-square-shown", slice: "markerSquare" },
+};
 const MARKER_SELECTED = { class: "marker-square-selected", slice: "markerSquare" };
 const ARROW_BEST = { class: "arrow-best" };
 // What the right-click annotator draws, as opposed to what the app draws.
@@ -254,13 +263,23 @@ async function renderDrill(d) {
   // left, which is worse than no arrow at all.
   const showingBest = !!a && d.done && a.verdict !== "best" && a.best_move
                       && bestIsOut(d);
+  const hist = d.history || [];
+  const at = cursorAt(d);
+  const stepping = at < hist.length;      // standing somewhere earlier
   const key = `${d.node_id_current}|${d.opp_move}|${d.round}` +
-              `|${d.depth_level}|${d.step || 1}|${showingBest ? "best" : ""}`;
-  const target = showingBest ? d.fen : (d.done && a ? a.fen_after : d.fen);
+              `|${d.depth_level}|${d.step || 1}|${showingBest ? "best" : ""}` +
+              `|${stepping ? at : ""}`;
+  const target = stepping
+    ? (at === 0 ? d.base_fen : hist[at - 1].fen)
+    : (showingBest ? d.fen : (d.done && a ? a.fen_after : d.fen));
 
   board.disableMoveInput();
   await orient(d.my_colour === "black" ? COLOR.black : COLOR.white);
-  if (!a && key !== shownKey && d.base_fen) {
+  if (stepping) {
+    // Walking the round's own moves: no animation, just the position asked
+    // for. The replays below would drag the board back to the latest one.
+    await setBoard(target, false);
+  } else if (!a && key !== shownKey && d.base_fen) {
     // A new round: show the position they moved from, then play their move.
     await setBoard(d.base_fen, false);
     markers([[d.opp_move.slice(0, 2), MARKER_MOVE]], true);
@@ -278,7 +297,15 @@ async function renderDrill(d) {
   shownKey = key;
 
   board.removeArrows();
-  if (showingBest) {
+  if (stepping) {
+    const last = at > 0 ? hist[at - 1] : null;
+    if (last) {
+      markers([[last.uci.slice(0, 2), MARKER_MOVE],
+               [last.uci.slice(2, 4), MARKER_MOVE]], true);
+    } else {
+      markers([], true);
+    }
+  } else if (showingBest) {
     // One thing on the board: the move you were looking for, from the square
     // it starts on, in the position where it had to be found. Your own move
     // is not drawn here — it is not on this board.
@@ -291,13 +318,26 @@ async function renderDrill(d) {
   }
 
   document.body.dataset.turn = d.my_colour;
-  if (d.can_answer) {
+  if (d.can_answer && !stepping) {
     board.enableMoveInput(inputHandler, d.my_colour === "black" ? COLOR.black : COLOR.white);
   }
 
   const reply = d.opp_reply && !d.done ? d.opp_reply.san : null;
   const more = d.chain > 1 ? ` Move ${d.step} of ${d.chain}.` : "";
   const asPlayed = d.opp_played_in_game ? " — as in the game" : "";
+  if (stepping) {
+    const last = at > 0 ? hist[at - 1] : null;
+    const who = last ? (last.by === "you" ? "You played" : "They played") : "";
+    el.status.textContent = last
+      ? `${who} ${last.san}. Step ${at} of ${hist.length} — → to come back.`
+      : `The position before their move. → to step forward.`;
+    renderContext(d);
+    renderProgress(d);
+    renderVerdict(d);
+    renderActions(d);
+    renderTree();
+    return;
+  }
   el.status.textContent = d.can_answer
     ? (reply ? `They answered ${reply}. Your move.${more}`
              : `They played ${d.opp_san}${asPlayed}. Your move.${more}`)
@@ -341,7 +381,7 @@ function markersFor(d, midMove) {
     out.push([last.slice(2, 4), MARKER_MOVE]);
   }
   if (a && a.my_move) {
-    const tone = a.verdict === "best" ? MARKER_BEST : MARKER_PLAYED;
+    const tone = MARKER_TONE[a.tone] || MARKER_PLAYED;
     out.push([a.my_move.slice(0, 2), tone]);
     out.push([a.my_move.slice(2, 4), tone]);
   }
@@ -405,6 +445,25 @@ function renderProgress(d) {
   el.progress.innerHTML = html;
 }
 
+// Walking back through the moves played in this round. null means "at the
+// latest position", which is where everything starts.
+let stepCursor = { key: null, at: null };
+
+function cursorAt(d) {
+  const key = revealKey(d);
+  if (stepCursor.key !== key) stepCursor = { key, at: null };
+  const hist = d.history || [];
+  return stepCursor.at === null ? hist.length : stepCursor.at;
+}
+
+function stepTo(d, index) {
+  const hist = d.history || [];
+  const at = Math.max(0, Math.min(index, hist.length));
+  stepCursor = { key: revealKey(d), at: at >= hist.length ? null : at };
+  shownKey = null;
+  renderDrill(d);
+}
+
 // Nothing is given away before you ask for it: the reasons are behind a
 // button, and the engine's move is behind a second one.
 let revealed = { key: null, cost: false, best: false };
@@ -419,10 +478,12 @@ function revealState(d) {
   if (revealed.key !== key) {
     const a = d.answer || {};
     // Asking to be shown the move is asking for all of it. Finding the move
-    // yourself leaves nothing to spoil either.
+    // yourself leaves nothing to spoil either. The lines stay folded even
+    // then: reading the continuation is the drill, not the answer to it.
     const open = a.verdict === "shown" || a.verdict === "best";
-    revealed = { key, cost: open, best: open };
+    revealed = { key, cost: open, best: open, lines: {} };
   }
+  if (!revealed.lines) revealed.lines = {};
   return revealed;
 }
 
@@ -482,7 +543,8 @@ function renderVerdict(d) {
     theirs = `<div class="section"><div class="explain">${whyHtml}</div>` +
              pvRow("Line", ex.best_pv, "best") + `</div>`;
   } else if (open.best) {
-    theirs = `<div class="section"><div class="tag">The engine's move</div>` +
+    theirs = oppSection(d) +
+      `<div class="section"><div class="tag">The engine's move</div>` +
       `<div class="detail">Best was <b>${esc(a.best_san)}</b>` +
       (a.wp_best !== null && a.wp_best !== undefined
         ? ` · ${a.wp_best.toFixed(0)}% vs ${(a.wp_mine ?? 0).toFixed(0)}%` : "") +
@@ -515,8 +577,37 @@ function explainHtml(ex) {
     `<p class="${esc(i.kind || "")}">${esc(i.text)}</p>`).join("") + `</div>`;
 }
 
+/** Their move, judged among the moves they had. Shown with the answer,
+    because a bad move of theirs points straight at what to play. */
+function oppSection(d) {
+  const o = d.opp_explanation;
+  if (!o) return "";
+  const rank = o.rank && o.options
+    ? `${ordinal(o.rank)} of ${o.options} they had` : "";
+  const claims = (o.claims || []).slice(0, 3);
+  return `<div class="section"><div class="tag">Their move</div>` +
+    `<div class="detail"><b>${esc(o.san)}</b> — ` +
+    `<span class="${esc(o.tone || "")}">${esc(o.label || "")}</span>` +
+    (rank ? ` · ${esc(rank)}` : "") + `</div>` +
+    (claims.length
+      ? `<div class="explain">` +
+        claims.map((c) => `<p>${esc(c.text)}</p>`).join("") + `</div>`
+      : "") + `</div>`;
+}
+
+function ordinal(n) {
+  return ["", "first", "second", "third", "fourth", "fifth", "sixth",
+          "seventh", "eighth"][n] || `${n}th`;
+}
+
 function pvRow(label, pv, kind) {
   if (!pv || !pv.length) return "";
+  // The continuation gives the game away as surely as the move does, so it
+  // is folded until you ask for it, separately from the reasoning.
+  if (!(revealed.lines || {})[kind]) {
+    return `<div class="row small"><button data-act="reveal-line"` +
+      ` data-kind="${kind}">Show the line (${pv.length} moves)</button></div>`;
+  }
   const tag = kind === "best" ? "tag best-tag" : "tag";
   return `<div class="pv"><span class="${tag}">${label}</span>` + pv.map((m, i) =>
     `<button data-act="pv" data-kind="${kind}" data-i="${i}"` +
@@ -542,7 +633,18 @@ function renderActions(d) {
                                false, "wide")]));
     }
   }
-  const small = [btnHtml("reset", "Replay it")];
+  // Stepping through what has been played here, and starting over at two
+  // different sizes: this move again, or the whole drill from its first
+  // position.
+  const hist = d.history || [];
+  if (hist.length) {
+    rows.push(rowOf([
+      btnHtml("step-back", "←", cursorAt(d) === 0),
+      btnHtml("step-fwd", "→", cursorAt(d) >= hist.length),
+    ], "small steps"));
+  }
+  const small = [btnHtml("reset", "Replay move"),
+                 btnHtml("restart", "Replay drill")];
   if (state.stack_depth > 1 || d.depth_level) {
     small.push(btnHtml("back", "← Back a level"));
   }
@@ -923,6 +1025,14 @@ async function openHelp() {
     ` to put it down. A click on an occupied square clears it, <b>Undo</b>` +
     ` (Ctrl+Z) walks back every change, and <b>Leave set-up</b> or Esc` +
     ` returns to the drill.</div>` +
+    `<div class="sec">After you answer</div>` +
+    `<div class="meta">The verdict alone at first: no move named, no arrow,` +
+    ` no lines. One button explains what your move did, a second explains the` +
+    ` engine's move and what your opponent's move was worth, and the` +
+    ` continuations stay folded until you ask for them. The square your move` +
+    ` landed on is coloured by the verdict: green for the best move, blue for` +
+    ` a good one, then yellow, orange and red. <b>←</b> and <b>→</b> step` +
+    ` back and forth through the moves played in the round.</div>` +
     `<div class="sec">One game at a time</div>` +
     `<div class="meta"><b>Games played</b> lists everything in the database,` +
     ` searchable by name, Elo range and date. Analyse a chess.com link or a` +
@@ -932,6 +1042,7 @@ async function openHelp() {
     ` at once when you would rather have the processor back.</div>` +
     `<div class="sec">Keys</div><table class="stats">` + [
       ["Enter", "Next position"], ["X", "Explain: your move, then theirs"],
+      ["← →", "Step back and forward through this round"],
       ["O / B", "Browse positions"],
       ["G", "Games played"],
       ["W", "Engines warming on/off"], ["M", "Cycle mode"],
@@ -1368,6 +1479,14 @@ document.addEventListener("click", async (event) => {
       dismissedJob = state.job ? jobKey(state.job) : null;
       renderCards(state);
       return void call("/api/analyse/dismiss", {});
+    case "step-back": return stepTo(state.drill, cursorAt(state.drill) - 1);
+    case "step-fwd": return stepTo(state.drill, cursorAt(state.drill) + 1);
+    case "reveal-line": {
+      const open = revealState(state.drill);
+      open.lines[hit.dataset.kind] = true;
+      return renderVerdict(state.drill);
+    }
+    case "restart": shownKey = null; return void call("/api/restart", {});
     case "reveal-cost":
       revealState(state.drill).cost = true;
       revealed.cost = true;
@@ -1431,6 +1550,10 @@ document.addEventListener("keydown", (event) => {
   if (editor.open) return;
   const g = state && state.game;
   const d = state && state.drill;
+  if (!g && d && (key === "ArrowLeft" || key === "ArrowRight")) {
+    event.preventDefault();
+    return stepTo(d, cursorAt(d) + (key === "ArrowLeft" ? -1 : 1));
+  }
   if (g) {
     const map = { ArrowLeft: g.ply - 1, ArrowRight: g.ply + 1, Home: 0, End: g.moves.length };
     if (key in map) { event.preventDefault(); return void call("/api/game/goto", { ply: map[key] }); }

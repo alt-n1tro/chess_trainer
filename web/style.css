@@ -215,8 +215,17 @@ body[data-turn="black"] .turn-dot { background: #22242a; }
 .cm-chessboard.ct .coordinates .coordinate.black { fill: var(--sq-light); }
 .cm-chessboard { border-radius: 4px; overflow: hidden; }
 .cm-chessboard .marker-square-move { fill: var(--sq-move); }
-.cm-chessboard .marker-square-best { fill: rgba(127, 176, 105, .5); }
-.cm-chessboard .marker-square-played { fill: rgba(210, 84, 75, .45); }
+/* The square your move landed on is coloured by what the move was worth,
+   the same ladder the verdict uses: green best, blue playable, then yellow,
+   orange, red. A second-best move is not a blunder and must not look like
+   one. */
+.cm-chessboard .marker-square-best { fill: rgba(127, 176, 105, .55); }
+.cm-chessboard .marker-square-good { fill: rgba(106, 159, 216, .5); }
+.cm-chessboard .marker-square-inaccuracy { fill: rgba(227, 179, 65, .5); }
+.cm-chessboard .marker-square-mistake { fill: rgba(224, 139, 60, .5); }
+.cm-chessboard .marker-square-blunder { fill: rgba(210, 84, 75, .5); }
+.cm-chessboard .marker-square-shown { fill: rgba(154, 160, 171, .45); }
+.cm-chessboard .marker-square-played { fill: rgba(154, 160, 171, .45); }
 .cm-chessboard .marker-square-check { fill: var(--sq-check); }
 .cm-chessboard .marker-square-selected { fill: rgba(246, 246, 105, .45); }
 .cm-chessboard .marker-dot { fill: rgba(20, 22, 28, .28); }
@@ -331,6 +340,13 @@ body[data-editing] #tree-box { display: none; }
 .card .row { display: flex; gap: 8px; margin-top: 11px; }
 .card .row button { flex: 1; }
 .card .row.small button { font-size: 13px; padding: 7px 10px; }
+#actions .row.steps button { flex: 0 0 auto; min-width: 64px; }
+.card .detail .best { color: var(--best); }
+.card .detail .good { color: var(--good); }
+.card .detail .inaccuracy { color: var(--inaccuracy); }
+.card .detail .mistake { color: var(--mistake); }
+.card .detail .blunder { color: var(--blunder); }
+.card .detail .shown { color: var(--shown); }
 .card .explain { margin-top: 9px; font-size: 14px; line-height: 1.55; }
 .card .explain p { margin: 0 0 7px; }
 .card .explain p:last-child { margin-bottom: 0; }

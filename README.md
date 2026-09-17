@@ -62,6 +62,24 @@ position · `T` statistics · `G` games played · `W` engines warming on/off ·
 
 ## Nothing is given away
 
+Three steps, each one asked for: the reasoning about your move, then the
+engine's move with what your opponent's move was worth, and the lines last of
+all. A continuation gives the game away as surely as a move does, so it stays
+folded until you press *Show the line*.
+
+The square your move landed on is coloured by the verdict, the same ladder
+the panel uses: green for the best move, blue for a good one, then yellow,
+orange and red. A second-best move never looks like a blunder.
+
+`←` and `→`, or the two arrow buttons, step back and forth through the moves
+played in the round. *Replay move* starts this position again; *Replay drill*
+starts the whole drill from its first position.
+
+Your opponent's move is judged too, among the moves they had, and explained
+from your side of the board: what it hands you, what it threatens, and
+whether it was the best they had.
+
+
 When you have answered, the panel says what your move was worth and nothing
 else: no best move named, no arrow on the board, no lines to read. One button
 reveals why your move was what it was, and only then does a second offer to
